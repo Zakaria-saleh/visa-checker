@@ -64,18 +64,15 @@ def logout():
     return redirect(url_for('login'))
 
 
-# ===== دالة استخراج جميع بيانات التأشيرة =====
+# ===== دالة استخراج بيانات التأشيرة مع التحقق من عدد الباركودات =====
 def extract_visa_data(app_number):
     """
-    استخراج جميع بيانات التأشيرة من صفحة Enjaz
-    
-    القاعدة:
-    - وجود رقم المستند (الأسود) = مؤشرة ✅
-    - بدون رقم المستند = غير مؤشرة ❌
+    القاعدة الجديدة:
+    - باركودين (يمين + يسار) = مؤشر ✅
+    - باركود واحد فقط = غير مؤشر ❌
     """
     url = BASE_URL.format(app_number)
     
-    # بيانات افتراضية
     result = {
         'status': 'غير مؤشر',
         'document_number': '',
@@ -88,6 +85,7 @@ def extract_visa_data(app_number):
         'entry_count': '',
         'representation': '',
         'request_date': '',
+        'barcode_count': 0,
         'error': ''
     }
     
@@ -103,185 +101,251 @@ def extract_visa_data(app_number):
             html_text = response.text
             soup = BeautifulSoup(html_text, 'html.parser')
             
-            # 1️ البحث عن رقم المستند (الأسود) - يدل على أنها مؤشرة
-            document_number = ''
+            # ===== 1️ عدّ الباركودات =====
+            barcode_count = 0
+            barcode_images = []
             
-            doc_patterns = [
-                r'رقم المستند[:\s]*(\d{7,12})',
-                r'Document Number[:\s]*(\d{7,12})',
-                r'Document No[:\s]*(\d{7,12})',
-                r'رقم المستند.*?(\d{7,12})'
-            ]
-            
-            for pattern in doc_patterns:
-                match = re.search(pattern, html_text, re.I | re.S)
-                if match:
-                    document_number = match.group(1).strip()
-                    break
-            
-            # ✅ إذا وجد رقم المستند = مؤشرة
-            if document_number:
-                result['status'] = 'مؤشر'
-                result['document_number'] = document_number
-            
-            # 2️⃣ استخراج تاريخ الإصدار/الطلب (الأصفر)
-            issue_date = ''
-            
-            date_patterns = [
-                r'تاريخ الطلب[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})',
-                r'Request Date[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})',
-                r'تاريخ الطلب.*?(\d{2}[/\-]\d{2}[/\-]\d{4})'
-            ]
-            
-            for pattern in date_patterns:
-                match = re.search(pattern, html_text, re.I | re.S)
-                if match:
-                    issue_date = match.group(1).strip()
-                    break
-            
-            if not issue_date:
-                issue_patterns = [
-                    r'تاريخ الإصدار[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})',
-                    r'Issue Date[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})',
-                    r'تاريخ الإصدار.*?(\d{2}[/\-]\d{2}[/\-]\d{4})'
+            # البحث عن جميع الصور التي قد تكون باركود
+            for img in soup.find_all('img'):
+                src = img.get('src', '').lower()
+                alt = img.get('alt', '').lower()
+                class_name = ' '.join(img.get('class', [])).lower()
+                id_name = img.get('id', '').lower()
+                
+                # مؤشرات الباركود
+                barcode_indicators = [
+                    'barcode', 'bar-code', 'bar_code',
+                    'bcs', 'bcimg', 'imgbarcode',
+                    'img-barcode', 'img_barcode',
+                    'printapplication', 'enjaz'
                 ]
                 
-                for pattern in issue_patterns:
+                is_barcode = False
+                for indicator in barcode_indicators:
+                    if indicator in src or indicator in alt or indicator in class_name or indicator in id_name:
+                        is_barcode = True
+                        break
+                
+                # التحقق من حجم الصورة (الباركود عادة صغير وعريض)
+                width = img.get('width', '')
+                height = img.get('height', '')
+                
+                # إذا كانت الصورة عريضة (عرض > ارتفاع) فهي غالباً باركود
+                if is_barcode:
+                    barcode_count += 1
+                    barcode_images.append({
+                        'src': src,
+                        'alt': alt,
+                        'width': width,
+                        'height': height
+                    })
+                elif width and height:
+                    try:
+                        w = int(width)
+                        h = int(height)
+                        # باركود عادة عرضه أكبر من ارتفاعه بـ 3 مرات على الأقل
+                        if w > 100 and w > h * 2:
+                            barcode_count += 1
+                            barcode_images.append({
+                                'src': src,
+                                'alt': alt,
+                                'width': width,
+                                'height': height
+                            })
+                    except:
+                        pass
+            
+            # البحث عن SVG للباركود
+            for svg in soup.find_all('svg'):
+                svg_class = ' '.join(svg.get('class', [])).lower()
+                if 'barcode' in svg_class or 'bcs' in svg_class:
+                    barcode_count += 1
+            
+            result['barcode_count'] = barcode_count
+            
+            # ===== 2️⃣ القرار: هل مؤشرة أم لا؟ =====
+            # القاعدة: باركودين = مؤشر، باركود واحد = غير مؤشر
+            is_issued = barcode_count >= 2
+            
+            if is_issued:
+                result['status'] = 'مؤشر'
+                
+                # استخراج رقم المستند (الأسود)
+                document_number = ''
+                doc_patterns = [
+                    r'رقم المستند[:\s]*(\d{7,12})',
+                    r'Document Number[:\s]*(\d{7,12})',
+                    r'Document No[:\s]*(\d{7,12})',
+                    r'رقم المستند.*?(\d{7,12})'
+                ]
+                
+                for pattern in doc_patterns:
+                    match = re.search(pattern, html_text, re.I | re.S)
+                    if match:
+                        document_number = match.group(1).strip()
+                        break
+                
+                result['document_number'] = document_number
+                
+                # استخراج تاريخ الإصدار/الطلب (الأصفر)
+                issue_date = ''
+                date_patterns = [
+                    r'تاريخ الطلب[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})',
+                    r'Request Date[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})',
+                    r'تاريخ الطلب.*?(\d{2}[/\-]\d{2}[/\-]\d{4})'
+                ]
+                
+                for pattern in date_patterns:
                     match = re.search(pattern, html_text, re.I | re.S)
                     if match:
                         issue_date = match.group(1).strip()
                         break
-            
-            result['issue_date'] = issue_date
-            
-            # 3️⃣ استخراج نوع التأشيرة (الأحمر)
-            visa_type = ''
-            
-            type_patterns = [
-                r'نوع التأشيرة[:\s]*([^\n<]+?)(?:\s*(?:عدد|اسم|الممثلة|<))',
-                r'Visa Type[:\s]*([^\n<]+?)(?:\s*(?:Entry|Name|<))',
-                r'نوع التأشيرة.*?(\w+)'
-            ]
-            
-            for pattern in type_patterns:
-                match = re.search(pattern, html_text, re.I | re.S)
-                if match:
-                    visa_type = match.group(1).strip()
-                    visa_type = re.sub(r'[\s\n]+', ' ', visa_type).strip()
-                    if visa_type and len(visa_type) > 1 and len(visa_type) < 50:
+                
+                if not issue_date:
+                    issue_patterns = [
+                        r'تاريخ الإصدار[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})',
+                        r'Issue Date[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})'
+                    ]
+                    
+                    for pattern in issue_patterns:
+                        match = re.search(pattern, html_text, re.I | re.S)
+                        if match:
+                            issue_date = match.group(1).strip()
+                            break
+                
+                result['issue_date'] = issue_date
+                
+                # استخراج نوع التأشيرة (الأحمر)
+                visa_type = ''
+                type_patterns = [
+                    r'نوع التأشيرة[:\s]*([^\n<]+?)(?:\s*(?:عدد|اسم|الممثلة|<))',
+                    r'Visa Type[:\s]*([^\n<]+?)(?:\s*(?:Entry|Name|<))',
+                    r'نوع التأشيرة.*?(\w+)'
+                ]
+                
+                for pattern in type_patterns:
+                    match = re.search(pattern, html_text, re.I | re.S)
+                    if match:
+                        visa_type = match.group(1).strip()
+                        visa_type = re.sub(r'[\s\n]+', ' ', visa_type).strip()
+                        if visa_type and len(visa_type) > 1 and len(visa_type) < 50:
+                            break
+                
+                result['visa_type'] = visa_type
+                
+                # استخراج اسم الشخص (عربي)
+                applicant_name = ''
+                name_patterns = [
+                    r'الاسم[:\s]*([^\n<]+?)(?:\s*(?:Name|<))',
+                    r'اسم الشخص.*?الطالبية[:\s]*([^\n<]+)',
+                    r'Applicant Name[:\s]*([^\n<]+)'
+                ]
+                
+                for pattern in name_patterns:
+                    match = re.search(pattern, html_text, re.I | re.S)
+                    if match:
+                        applicant_name = match.group(1).strip()
+                        applicant_name = re.sub(r'[\s\n]+', ' ', applicant_name).strip()
+                        if applicant_name and len(applicant_name) > 2:
+                            break
+                
+                result['applicant_name'] = applicant_name
+                
+                # استخراج اسم الشخص (إنجليزي)
+                applicant_name_en = ''
+                name_en_patterns = [
+                    r'Name[:\s]*([A-Z\s]+?)(?:\s*(?:نوع|<|$))',
+                    r'Name[:\s]*([A-Z][A-Z\s]+)'
+                ]
+                
+                for pattern in name_en_patterns:
+                    match = re.search(pattern, html_text)
+                    if match:
+                        applicant_name_en = match.group(1).strip()
+                        if applicant_name_en and len(applicant_name_en) > 2:
+                            break
+                
+                result['applicant_name_en'] = applicant_name_en
+                
+                # استخراج رقم الجواز
+                passport_number = ''
+                passport_patterns = [
+                    r'رقم الجواز[:\s]*(\d{7,12})',
+                    r'Passport Number[:\s]*(\d{7,12})',
+                    r'رقم الجواز.*?(\d{7,12})'
+                ]
+                
+                for pattern in passport_patterns:
+                    match = re.search(pattern, html_text, re.I | re.S)
+                    if match:
+                        passport_number = match.group(1).strip()
                         break
-            
-            result['visa_type'] = visa_type
-            
-            # 4️⃣ استخراج اسم الشخص (عربي)
-            applicant_name = ''
-            name_patterns = [
-                r'الاسم[:\s]*([^\n<]+?)(?:\s*(?:Name|<))',
-                r'اسم الشخص.*?الطالبية[:\s]*([^\n<]+)',
-                r'Applicant Name[:\s]*([^\n<]+)'
-            ]
-            
-            for pattern in name_patterns:
-                match = re.search(pattern, html_text, re.I | re.S)
-                if match:
-                    applicant_name = match.group(1).strip()
-                    applicant_name = re.sub(r'[\s\n]+', ' ', applicant_name).strip()
-                    if applicant_name and len(applicant_name) > 2:
+                
+                result['passport_number'] = passport_number
+                
+                # استخراج نوع الجواز
+                passport_type = ''
+                passport_type_patterns = [
+                    r'نوع الجواز[:\s]*([^\n<]+)',
+                    r'Passport Type[:\s]*([^\n<]+)'
+                ]
+                
+                for pattern in passport_type_patterns:
+                    match = re.search(pattern, html_text, re.I | re.S)
+                    if match:
+                        passport_type = match.group(1).strip()
                         break
-            
-            result['applicant_name'] = applicant_name
-            
-            # 5️⃣ استخراج اسم الشخص (إنجليزي)
-            applicant_name_en = ''
-            name_en_patterns = [
-                r'Name[:\s]*([A-Z\s]+?)(?:\s*(?:نوع|<|$))',
-                r'Name[:\s]*([A-Z][A-Z\s]+)'
-            ]
-            
-            for pattern in name_en_patterns:
-                match = re.search(pattern, html_text)
-                if match:
-                    applicant_name_en = match.group(1).strip()
-                    if applicant_name_en and len(applicant_name_en) > 2:
+                
+                result['passport_type'] = passport_type
+                
+                # استخراج عدد مرات الدخول
+                entry_count = ''
+                entry_patterns = [
+                    r'عدد مرات الدخول[:\s]*([^\n<]+)',
+                    r'Number of Entries[:\s]*([^\n<]+)'
+                ]
+                
+                for pattern in entry_patterns:
+                    match = re.search(pattern, html_text, re.I | re.S)
+                    if match:
+                        entry_count = match.group(1).strip()
                         break
-            
-            result['applicant_name_en'] = applicant_name_en
-            
-            # 6️ استخراج رقم الجواز
-            passport_number = ''
-            passport_patterns = [
-                r'رقم الجواز[:\s]*(\d{7,12})',
-                r'Passport Number[:\s]*(\d{7,12})',
-                r'رقم الجواز.*?(\d{7,12})'
-            ]
-            
-            for pattern in passport_patterns:
-                match = re.search(pattern, html_text, re.I | re.S)
-                if match:
-                    passport_number = match.group(1).strip()
-                    break
-            
-            result['passport_number'] = passport_number
-            
-            # 7️ استخراج نوع الجواز
-            passport_type = ''
-            passport_type_patterns = [
-                r'نوع الجواز[:\s]*([^\n<]+)',
-                r'Passport Type[:\s]*([^\n<]+)'
-            ]
-            
-            for pattern in passport_type_patterns:
-                match = re.search(pattern, html_text, re.I | re.S)
-                if match:
-                    passport_type = match.group(1).strip()
-                    break
-            
-            result['passport_type'] = passport_type
-            
-            # 8️ استخراج عدد مرات الدخول
-            entry_count = ''
-            entry_patterns = [
-                r'عدد مرات الدخول[:\s]*([^\n<]+)',
-                r'Number of Entries[:\s]*([^\n<]+)'
-            ]
-            
-            for pattern in entry_patterns:
-                match = re.search(pattern, html_text, re.I | re.S)
-                if match:
-                    entry_count = match.group(1).strip()
-                    break
-            
-            result['entry_count'] = entry_count
-            
-            # 9️⃣ استخراج الممثلة في
-            representation = ''
-            rep_patterns = [
-                r'الممثلة في[:\s]*([^\n<]+)',
-                r'Represented in[:\s]*([^\n<]+)'
-            ]
-            
-            for pattern in rep_patterns:
-                match = re.search(pattern, html_text, re.I | re.S)
-                if match:
-                    representation = match.group(1).strip()
-                    break
-            
-            result['representation'] = representation
-            
-            # 🔟 استخراج تاريخ الطلب
-            request_date = ''
-            req_date_patterns = [
-                r'تاريخ الطلب[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})',
-                r'Request Date[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})'
-            ]
-            
-            for pattern in req_date_patterns:
-                match = re.search(pattern, html_text, re.I | re.S)
-                if match:
-                    request_date = match.group(1).strip()
-                    break
-            
-            result['request_date'] = request_date
+                
+                result['entry_count'] = entry_count
+                
+                # استخراج الممثلة في
+                representation = ''
+                rep_patterns = [
+                    r'الممثلة في[:\s]*([^\n<]+)',
+                    r'Represented in[:\s]*([^\n<]+)'
+                ]
+                
+                for pattern in rep_patterns:
+                    match = re.search(pattern, html_text, re.I | re.S)
+                    if match:
+                        representation = match.group(1).strip()
+                        break
+                
+                result['representation'] = representation
+                
+                # استخراج تاريخ الطلب
+                request_date = ''
+                req_date_patterns = [
+                    r'تاريخ الطلب[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})',
+                    r'Request Date[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})'
+                ]
+                
+                for pattern in req_date_patterns:
+                    match = re.search(pattern, html_text, re.I | re.S)
+                    if match:
+                        request_date = match.group(1).strip()
+                        break
+                
+                result['request_date'] = request_date
+                
+            else:
+                # غير مؤشر - باركود واحد أو لا يوجد
+                result['status'] = 'غير مؤشر'
             
             return result
         else:
