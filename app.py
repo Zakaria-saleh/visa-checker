@@ -64,110 +64,237 @@ def logout():
     return redirect(url_for('login'))
 
 
-# ===== دالة التحقق من التأشيرة (القاعدة الصحيحة) =====
-def check_visa_status(app_number):
+# ===== دالة استخراج جميع بيانات التأشيرة =====
+def extract_visa_data(app_number):
     """
-    القاعدة: 
-    - باركود + رقم المستند = مؤشرة ✅
-    - تاريخ الإصدار بدون باركود = غير مؤشرة ❌
+    استخراج جميع بيانات التأشيرة من صفحة Enjaz
+    
+    القاعدة:
+    - وجود رقم المستند (الأسود) = مؤشرة ✅
+    - بدون رقم المستند = غير مؤشرة ❌
     """
     url = BASE_URL.format(app_number)
+    
+    # بيانات افتراضية
+    result = {
+        'status': 'غير مؤشر',
+        'document_number': '',      # رقم المستند (أسود) - يدل على أنها مؤشرة
+        'issue_date': '',           # تاريخ الإصدار/الطلب (أصفر)
+        'visa_type': '',            # نوع التأشيرة (أحمر)
+        'applicant_name': '',       # اسم الشخص
+        'applicant_name_en': '',    # اسم الشخص بالإنجليزي
+        'passport_number': '',      # رقم الجواز
+        'passport_type': '',        # نوع الجواز
+        'entry_count': '',          # عدد مرات الدخول
+        'representation': '',       # الممثلة في
+        'request_date': '',         # تاريخ الطلب
+        'error': ''
+    }
+    
     try:
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'ar-SA,ar;q=0.9,en;q=0.8'
         }
-        response = requests.get(url, headers=headers, timeout=15)
+        response = requests.get(url, headers=headers, timeout=20)
 
         if response.status_code == 200:
             html_text = response.text
             soup = BeautifulSoup(html_text, 'html.parser')
-
-            has_barcode = False
-            has_document_number = False
             
-            # 1️⃣ البحث عن الباركود
-            barcode_indicators = [
-                'barcode', 'bar-code', 'bar_code',
-                'bcsImg', 'imgBarcode', 'bcImg', 'img-barcode',
-                'bcs', 'bcimg'
+            # 🔍 1. البحث عن رقم المستند (الأسود) - يدل على أنها مؤشرة
+            document_number = ''
+            
+            doc_patterns = [
+                r'رقم المستند[:\s]*(\d{7,12})',
+                r'Document Number[:\s]*(\d{7,12})',
+                r'Document No[:\s]*(\d{7,12})',
+                r'رقم المستند.*?(\d{7,12})'
             ]
             
-            # البحث في الصور
-            for img in soup.find_all('img'):
-                src = img.get('src', '').lower()
-                alt = img.get('alt', '').lower()
-                class_name = ' '.join(img.get('class', [])).lower()
-                id_name = img.get('id', '').lower()
-                
-                for indicator in barcode_indicators:
-                    if indicator in src or indicator in alt or indicator in class_name or indicator in id_name:
-                        has_barcode = True
-                        break
-                
-                if 'bcs' in src or 'barcode' in src or 'bc' in src:
-                    has_barcode = True
-            
-            # البحث عن SVG
-            for svg in soup.find_all('svg'):
-                if svg.get('class') and any('barcode' in c.lower() for c in svg.get('class', [])):
-                    has_barcode = True
-            
-            # البحث عن div
-            for div in soup.find_all('div'):
-                div_class = ' '.join(div.get('class', [])).lower()
-                div_id = div.get('id', '').lower()
-                for indicator in barcode_indicators:
-                    if indicator in div_class or indicator in div_id:
-                        has_barcode = True
-                        break
-            
-            # 2️⃣ البحث عن "رقم المستند"
-            if 'رقم المستند' in html_text or 'Document Number' in html_text or 'Document No' in html_text:
-                has_document_number = True
-            
-            doc_pattern = re.compile(r'رقم المستند[:\s]+(\d{7,12})', re.I)
-            if doc_pattern.search(html_text):
-                has_document_number = True
-            
-            # 3️ القرار النهائي
-            has_visa = has_barcode or has_document_number
-
-            if has_visa:
-                issue_date = "غير متوفر"
-                visa_type = "غير محدد"
-
-                # البحث عن تاريخ الإصدار
-                date_pattern = re.compile(r'تاريخ الإصدار[:\s]+(\d{2}[/\-]\d{2}[/\-]\d{4})', re.I)
-                match = date_pattern.search(html_text)
+            for pattern in doc_patterns:
+                match = re.search(pattern, html_text, re.I | re.S)
                 if match:
-                    issue_date = match.group(1)
+                    document_number = match.group(1).strip()
+                    break
+            
+            # ✅ إذا وجد رقم المستند = مؤشرة
+            if document_number:
+                result['status'] = 'مؤشر'
+                result['document_number'] = document_number
+            
+            # 🔍 2. استخراج تاريخ الإصدار/الطلب (الأصفر)
+            issue_date = ''
+            
+            # نبحث عن تاريخ الطلب أولاً (لأنه موجود في الصورة)
+            date_patterns = [
+                r'تاريخ الطلب[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})',
+                r'Request Date[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})',
+                r'تاريخ الطلب.*?(\d{2}[/\-]\d{2}[/\-]\d{4})'
+            ]
+            
+            for pattern in date_patterns:
+                match = re.search(pattern, html_text, re.I | re.S)
+                if match:
+                    issue_date = match.group(1).strip()
+                    break
+            
+            # إذا لم نجد تاريخ الطلب، نبحث عن تاريخ الإصدار
+            if not issue_date:
+                issue_patterns = [
+                    r'تاريخ الإصدار[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})',
+                    r'Issue Date[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})',
+                    r'تاريخ الإصدار.*?(\d{2}[/\-]\d{2}[/\-]\d{4})'
+                ]
                 
-                if issue_date == "غير متوفر":
-                    request_date_pattern = re.compile(r'تاريخ الطلب[:\s]+(\d{2}[/\-]\d{2}[/\-]\d{4})', re.I)
-                    request_match = request_date_pattern.search(html_text)
-                    if request_match:
-                        issue_date = request_match.group(1)
-
-                # البحث عن نوع التأشيرة
-                type_pattern = re.compile(r'نوع التأشيرة[:\s]+([^\n<]+)', re.I)
-                type_match = type_pattern.search(html_text)
-                if type_match:
-                    visa_type = type_match.group(1).strip()
+                for pattern in issue_patterns:
+                    match = re.search(pattern, html_text, re.I | re.S)
+                    if match:
+                        issue_date = match.group(1).strip()
+                        break
+            
+            result['issue_date'] = issue_date
+            
+            # 🔍 3. استخراج نوع التأشيرة (الأحمر) - مثل: عمل، زيارة، إلخ
+            visa_type = ''
+            
+            # البحث عن "نوع التأشيرة" ثم استخراج القيمة بجانبها
+            type_patterns = [
+                r'نوع التأشيرة[:\s]*([^\n<]+?)(?:\s*(?:عدد|اسم|الممثلة|<))',
+                r'Visa Type[:\s]*([^\n<]+?)(?:\s*(?:Entry|Name|<))',
+                r'نوع التأشيرة.*?(\w+)'
+            ]
+            
+            for pattern in type_patterns:
+                match = re.search(pattern, html_text, re.I | re.S)
+                if match:
+                    visa_type = match.group(1).strip()
+                    visa_type = re.sub(r'[\s\n]+', ' ', visa_type).strip()
+                    if visa_type and len(visa_type) > 1 and len(visa_type) < 50:
+                        break
+            
+            result['visa_type'] = visa_type
+            
+            # 🔍 4. استخراج اسم الشخص (عربي)
+            applicant_name = ''
+            name_patterns = [
+                r'الاسم[:\s]*([^\n<]+?)(?:\s*(?:Name|<))',
+                r'اسم الشخص.*?الطالبية[:\s]*([^\n<]+)',
+                r'Applicant Name[:\s]*([^\n<]+)'
+            ]
+            
+            for pattern in name_patterns:
+                match = re.search(pattern, html_text, re.I | re.S)
+                if match:
+                    applicant_name = match.group(1).strip()
+                    applicant_name = re.sub(r'[\s\n]+', ' ', applicant_name).strip()
+                    if applicant_name and len(applicant_name) > 2:
+                        break
+            
+            result['applicant_name'] = applicant_name
+            
+            # 🔍 5. استخراج اسم الشخص (إنجليزي)
+            applicant_name_en = ''
+            name_en_patterns = [
+                r'Name[:\s]*([A-Z\s]+?)(?:\s*(?:نوع|<|$))',
+                r'Name[:\s]*([A-Z][A-Z\s]+)'
+            ]
+            
+            for pattern in name_en_patterns:
+                match = re.search(pattern, html_text)
+                if match:
+                    applicant_name_en = match.group(1).strip()
+                    if applicant_name_en and len(applicant_name_en) > 2:
+                        break
+            
+            result['applicant_name_en'] = applicant_name_en
+            
+            # 🔍 6. استخراج رقم الجواز
+            passport_number = ''
+            passport_patterns = [
+                r'رقم الجواز[:\s]*(\d{7,12})',
+                r'Passport Number[:\s]*(\d{7,12})',
+                r'رقم الجواز.*?(\d{7,12})'
+            ]
+            
+            for pattern in passport_patterns:
+                match = re.search(pattern, html_text, re.I | re.S)
+                if match:
+                    passport_number = match.group(1).strip()
+                    break
+            
+            result['passport_number'] = passport_number
+            
+            # 🔍 7. استخراج نوع الجواز
+            passport_type = ''
+            passport_type_patterns = [
+                r'نوع الجواز[:\s]*([^\n<]+)',
+                r'Passport Type[:\s]*([^\n<]+)'
+            ]
+            
+            for pattern in passport_type_patterns:
+                match = re.search(pattern, html_text, re.I | re.S)
+                if match:
+                    passport_type = match.group(1).strip()
+                    break
+            
+            result['passport_type'] = passport_type
+            
+            # 🔍 8. استخراج عدد مرات الدخول
+            entry_count = ''
+            entry_patterns = [
+                r'عدد مرات الدخول[:\s]*([^\n<]+)',
+                r'Number of Entries[:\s]*([^\n<]+)'
+            ]
+            
+            for pattern in entry_patterns:
+                match = re.search(pattern, html_text, re.I | re.S)
+                if match:
+                    entry_count = match.group(1).strip()
+                    break
+            
+            result['entry_count'] = entry_count
+            
+            # 🔍 9. استخراج الممثلة في
+            representation = ''
+            rep_patterns = [
+                r'الممثلة في[:\s]*([^\n<]+)',
+                r'Represented in[:\s]*([^\n<]+)'
+            ]
+            
+            for pattern in rep_patterns:
+                match = re.search(pattern, html_text, re.I | re.S)
+                if match:
+                    representation = match.group(1).strip()
+                    break
+            
+            result['representation'] = representation
+            
+            # 🔍 10. استخراج تاريخ الطلب (إذا لم نستخرجه سابقاً)
+            if not result['request_date']:
+                request_date = ''
+                req_date_patterns = [
+                    r'تاريخ الطلب[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})',
+                    r'Request Date[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})'
+                ]
                 
-                if visa_type == "غير محدد":
-                    en_type_pattern = re.compile(r'Visa Type[:\s]+([^\n<]+)', re.I)
-                    en_type_match = en_type_pattern.search(html_text)
-                    if en_type_match:
-                        visa_type = en_type_match.group(1).strip()
-
-                return 'مؤشر', issue_date, visa_type
-            else:
-                return 'غير مؤشر', '', ''
+                for pattern in req_date_patterns:
+                    match = re.search(pattern, html_text, re.I | re.S)
+                    if match:
+                        request_date = match.group(1).strip()
+                        break
+                
+                result['request_date'] = request_date
+            
+            return result
         else:
-            return f'خطأ ({response.status_code})', '', ''
+            result['error'] = f'خطأ ({response.status_code})'
+            return result
 
     except Exception as e:
-        return f'خطأ: {str(e)[:50]}', '', ''
+        result['error'] = f'خطأ: {str(e)[:100]}'
+        return result
 
 
 # ===== دالة التحقق من الشهادة الصحية =====
@@ -249,6 +376,7 @@ def index():
 @app.route('/process', methods=['POST'])
 @login_required
 def process_file():
+    """معالجة ملف Excel واستخراج جميع بيانات التأشيرة"""
     if 'file' not in request.files:
         return jsonify({'error': 'لم يتم رفع ملف'}), 400
 
@@ -262,6 +390,7 @@ def process_file():
     try:
         df = pd.read_excel(file)
 
+        # البحث عن عمود رقم الطلب
         col_name = None
         for col in df.columns:
             if 'رقم الطلب' in str(col) or 'application' in str(col).lower() or 'request' in str(col).lower():
@@ -271,9 +400,19 @@ def process_file():
         if not col_name:
             return jsonify({'error': 'لم يتم العثور على عمود "رقم الطلب"'}), 400
 
+        # إضافة أعمدة النتائج
         df['حالة التأشيرة'] = ''
+        df['رقم المستند'] = ''
         df['تاريخ الإصدار'] = ''
         df['نوع التأشيرة'] = ''
+        df['اسم الشخص'] = ''
+        df['الاسم بالإنجليزي'] = ''
+        df['رقم الجواز'] = ''
+        df['نوع الجواز'] = ''
+        df['عدد مرات الدخول'] = ''
+        df['الممثلة في'] = ''
+        df['تاريخ الطلب'] = ''
+        df['ملاحظات'] = ''
 
         total = len(df)
         success_count = 0
@@ -281,13 +420,24 @@ def process_file():
 
         for index, row in df.iterrows():
             app_no = str(row[col_name]).strip()
-            status, date, visa_type = check_visa_status(app_no)
+            
+            # استخراج جميع البيانات
+            visa_data = extract_visa_data(app_no)
+            
+            df.at[index, 'حالة التأشيرة'] = visa_data['status']
+            df.at[index, 'رقم المستند'] = visa_data['document_number']
+            df.at[index, 'تاريخ الإصدار'] = visa_data['issue_date']
+            df.at[index, 'نوع التأشيرة'] = visa_data['visa_type']
+            df.at[index, 'اسم الشخص'] = visa_data['applicant_name']
+            df.at[index, 'الاسم بالإنجليزي'] = visa_data['applicant_name_en']
+            df.at[index, 'رقم الجواز'] = visa_data['passport_number']
+            df.at[index, 'نوع الجواز'] = visa_data['passport_type']
+            df.at[index, 'عدد مرات الدخول'] = visa_data['entry_count']
+            df.at[index, 'الممثلة في'] = visa_data['representation']
+            df.at[index, 'تاريخ الطلب'] = visa_data['request_date']
+            df.at[index, 'ملاحظات'] = visa_data['error']
 
-            df.at[index, 'حالة التأشيرة'] = status
-            df.at[index, 'تاريخ الإصدار'] = date
-            df.at[index, 'نوع التأشيرة'] = visa_type
-
-            if 'مؤشر' in status:
+            if visa_data['status'] == 'مؤشر':
                 success_count += 1
             else:
                 error_count += 1
