@@ -11,17 +11,14 @@ from datetime import datetime
 import io
 import tempfile
 import hashlib
+import gc
 
 app = Flask(__name__, template_folder='visa_system/templates', static_folder='visa_system/static')
 CORS(app)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 
-# 🔐 مفتاح سري للـ sessions (مهم جداً!)
 app.secret_key = 'visa-system-secret-key-2026-xyz'
 
-# 🔐 بيانات تسجيل الدخول (مشفرة)
-# اسم المستخدم: زكريا السعدي
-# كلمة السر: 773983986
 VALID_USERNAME = 'زكريا السعدي'
 VALID_PASSWORD_HASH = hashlib.sha256('773983986'.encode()).hexdigest()
 
@@ -29,9 +26,7 @@ BASE_URL = 'https://visa.mofa.gov.sa/Enjaz/PrintApplication?ApplicationNo={}'
 MEDICAL_URL = 'https://visa.mofa.gov.sa/visaperson/checkmedicalresult'
 
 
-# ===== نظام المصادقة (Authentication) =====
 def login_required(f):
-    """ديكور للتحقق من تسجيل الدخول"""
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if 'logged_in' not in session:
@@ -42,12 +37,10 @@ def login_required(f):
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    """صفحة تسجيل الدخول"""
     if request.method == 'POST':
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '').strip()
         
-        # التحقق من البيانات
         password_hash = hashlib.sha256(password.encode()).hexdigest()
         
         if username == VALID_USERNAME and password_hash == VALID_PASSWORD_HASH:
@@ -57,7 +50,6 @@ def login():
         else:
             return render_template('login.html', error='اسم المستخدم أو كلمة السر غير صحيحة')
     
-    # إذا كان مسجل دخول بالفعل
     if 'logged_in' in session:
         return redirect(url_for('index'))
     
@@ -66,12 +58,10 @@ def login():
 
 @app.route('/logout')
 def logout():
-    """تسجيل الخروج"""
     session.clear()
     return redirect(url_for('login'))
 
 
-# ===== الدوال المساعدة =====
 def check_visa_status(app_number):
     url = BASE_URL.format(app_number)
     try:
@@ -81,7 +71,6 @@ def check_visa_status(app_number):
         response = requests.get(url, headers=headers, timeout=15)
 
         if response.status_code == 200:
-            soup = BeautifulSoup(response.text, 'html.parser')
             html_text = response.text
 
             has_visa = False
@@ -113,7 +102,6 @@ def check_visa_status(app_number):
 
 
 def check_medical_certificate(app_number, passport_number):
-    """التحقق من الشهادة الصحية برقم الطلب ورقم الجواز"""
     try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -131,7 +119,6 @@ def check_medical_certificate(app_number, passport_number):
         
         if response.status_code == 200:
             html_text = response.text
-            soup = BeautifulSoup(html_text, 'html.parser')
             
             has_certificate = False
             status = "غير متوفر"
@@ -182,7 +169,6 @@ def check_medical_certificate(app_number, passport_number):
         }
 
 
-# ===== المسارات المحمية =====
 @app.route('/')
 @login_required
 def index():
@@ -219,7 +205,6 @@ def process_file():
         df['نوع التأشيرة'] = ''
 
         total = len(df)
-        processed = 0
         success_count = 0
         error_count = 0
 
@@ -231,13 +216,12 @@ def process_file():
             df.at[index, 'تاريخ الإصدار'] = date
             df.at[index, 'نوع التأشيرة'] = visa_type
 
-            processed += 1
             if 'مؤشر' in status:
                 success_count += 1
             else:
                 error_count += 1
 
-            time.sleep(1)
+            time.sleep(0.5)  # تقليل الوقت
 
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         output_filename = f'results_{timestamp}.xlsx'
@@ -251,6 +235,8 @@ def process_file():
         output_path = os.path.join(tmpdir, output_filename)
         with open(output_path, 'wb') as f:
             f.write(output.getvalue())
+
+        gc.collect()  # تحرير الذاكرة
 
         return jsonify({
             'success': True,
@@ -378,7 +364,7 @@ def process_medical_file():
             else:
                 error_count += 1
 
-            time.sleep(1)
+            time.sleep(0.5)  # تقليل الوقت
 
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         output_filename = f'medical_results_{timestamp}.xlsx'
@@ -392,6 +378,8 @@ def process_medical_file():
         output_path = os.path.join(tmpdir, output_filename)
         with open(output_path, 'wb') as f:
             f.write(output.getvalue())
+
+        gc.collect()  # تحرير الذاكرة
 
         return jsonify({
             'success': True,
