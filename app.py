@@ -49,13 +49,8 @@ def logout():
     session.clear()
     return redirect(url_for('login'))
 
-# ===== الدالة البسيطة والموثوقة =====
+# ===== الدالة مع عكس النتيجة =====
 def check_visa_status(app_number):
-    """
-    بسيط جداً: نبحث عن label يحتوي على "رقم المستند"
-    إذا وُجد = مؤشر
-    إذا لم يُوجد = غير مؤشر
-    """
     url = BASE_URL.format(app_number)
     
     try:
@@ -68,18 +63,16 @@ def check_visa_status(app_number):
         response.encoding = 'utf-8'
         
         if response.status_code == 200:
-            # استخدام BeautifulSoup للبحث عن label
             soup = BeautifulSoup(response.text, 'html.parser')
             
-            # البحث عن جميع labels
             for label in soup.find_all('label'):
                 label_text = label.get_text(strip=True)
                 if 'رقم المستند' in label_text:
-                    # وُجد "رقم المستند" = مؤشر
-                    return 'مؤشر'
+                    # 🔥 عكس النتيجة: كان "مؤشر" أصبح "غير مؤشر" 🔥
+                    return 'غير مؤشر'
             
-            # لم يُعثر على "رقم المستند" = غير مؤشر
-            return 'غير مؤشر'
+            # 🔥 عكس النتيجة: كان "غير مؤشر" أصبح "مؤشر" 🔥
+            return 'مؤشر'
         else:
             return 'خطأ اتصال'
             
@@ -104,7 +97,6 @@ def process_file():
     try:
         df = pd.read_excel(file)
         
-        # البحث عن عمود رقم الطلب
         col_name = None
         for col in df.columns:
             if 'رقم الطلب' in str(col) or 'application' in str(col).lower():
@@ -114,7 +106,6 @@ def process_file():
         if not col_name:
             return jsonify({'error': 'لم يتم العثور على عمود "رقم الطلب"'}), 400
 
-        # إضافة عمود حالة التأشيرة فقط
         df['حالة التأشيرة'] = ''
 
         success_count = 0
@@ -122,8 +113,6 @@ def process_file():
 
         for index, row in df.iterrows():
             app_no = str(row[col_name]).strip()
-            
-            # التحقق من الحالة فقط
             status = check_visa_status(app_no)
             df.at[index, 'حالة التأشيرة'] = status
 
@@ -132,7 +121,6 @@ def process_file():
             else:
                 error_count += 1
             
-            # انتظار لتجنب الحظر
             time.sleep(2.5)
 
         filename = f"results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
