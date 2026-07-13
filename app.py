@@ -64,13 +64,8 @@ def logout():
     return redirect(url_for('login'))
 
 
-# ===== دالة استخراج بيانات التأشيرة (القاعدة الدقيقة) =====
+# ===== دالة استخراج بيانات التأشيرة (القاعدة الدقيقة 100%) =====
 def extract_visa_data(app_number):
-    """
-    القاعدة الدقيقة 100%:
-    - إذا تواجد النص "رقم المستند" في الصفحة = مؤشر ✅
-    - إذا لم يتواجد = غير مؤشر ❌
-    """
     url = BASE_URL.format(app_number)
     
     result = {
@@ -93,68 +88,62 @@ def extract_visa_data(app_number):
         if response.status_code == 200:
             html_text = response.text
             
-            # 🔍 القاعدة الأساسية: البحث عن "رقم المستند"
-            # نبحث عن النص سواء كان داخل label أو أي مكان في الصفحة
-            has_document_number = 'رقم المستند' in html_text or 'Document Number' in html_text
+            # 🔍 القاعدة الدقيقة 100%:
+            # 1. البحث عن "رقم المستند" كـ Label متبوعاً بـ Div يحتوي على أرقام فعلياً
+            # 2. أو البحث عن "تاريخ الإصدار" أو "تاريخ التأشيرة"
             
-            if has_document_number:
+            is_issued = False
+            document_number = ''
+            issue_date = ''
+            
+            # فحص رقم المستند بدقة (يتجاهل وجود الكلمة داخل أكواد JS)
+            doc_match = re.search(r'رقم المستند\s*</label>.*?<div[^>]*>\s*(\d{7,12})\s*</div>', html_text, re.IGNORECASE | re.DOTALL)
+            if doc_match:
+                is_issued = True
+                document_number = doc_match.group(1).strip()
+            
+            # فحص تاريخ الإصدار أو تاريخ التأشيرة بدقة
+            date_match = re.search(r'(?:تاريخ الإصدار|تاريخ التأشيرة)\s*</label>.*?<div[^>]*>\s*(\d{2}[/\-]\d{2}[/\-]\d{4})\s*</div>', html_text, re.IGNORECASE | re.DOTALL)
+            if date_match:
+                is_issued = True
+                issue_date = date_match.group(1).strip()
+            
+            # إذا لم نجد تاريخ الإصدار، نبحث عن تاريخ الطلب للعرض فقط (لكن لا يغير الحالة إلى مؤشر)
+            if not issue_date:
+                req_date_match = re.search(r'تاريخ الطلب\s*</label>.*?<div[^>]*>\s*(\d{2}[/\-]\d{2}[/\-]\d{4})\s*</div>', html_text, re.IGNORECASE | re.DOTALL)
+                if req_date_match:
+                    issue_date = req_date_match.group(1).strip()
+
+            if is_issued:
                 result['status'] = 'مؤشر'
-                
-                # استخراج تاريخ الإصدار/الطلب
-                date_patterns = [
-                    r'تاريخ الطلب[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})',
-                    r'تاريخ الإصدار[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})',
-                    r'Request Date[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})',
-                    r'Issue Date[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})'
-                ]
-                for pattern in date_patterns:
-                    match = re.search(pattern, html_text, re.I)
-                    if match:
-                        result['issue_date'] = match.group(1).strip()
-                        break
+                result['issue_date'] = issue_date
                 
                 # استخراج نوع التأشيرة
-                type_patterns = [
-                    r'نوع التأشيرة[:\s]*([^\n<]+?)(?:\s*(?:عدد|اسم|الممثلة|<))',
-                    r'Visa Type[:\s]*([^\n<]+?)(?:\s*(?:Entry|Name|<))'
-                ]
-                for pattern in type_patterns:
-                    match = re.search(pattern, html_text, re.I)
-                    if match:
-                        visa_type = match.group(1).strip()
-                        visa_type = re.sub(r'[\s\n]+', ' ', visa_type).strip()
-                        if visa_type and len(visa_type) > 1:
-                            result['visa_type'] = visa_type
-                            break
+                type_match = re.search(r'نوع التأشيرة\s*</label>.*?<div[^>]*>\s*([^\n<]+?)\s*</div>', html_text, re.IGNORECASE | re.DOTALL)
+                if type_match:
+                    result['visa_type'] = type_match.group(1).strip()
                 
-                # استخراج اسم الشخص
-                name_patterns = [
-                    r'الاسم[:\s]*([^\n<]+?)(?:\s*(?:Name|<))',
-                    r'اسم الشخص.*?الطالبية[:\s]*([^\n<]+)',
-                    r'Applicant Name[:\s]*([^\n<]+)'
-                ]
-                for pattern in name_patterns:
-                    match = re.search(pattern, html_text, re.I)
-                    if match:
-                        result['applicant_name'] = match.group(1).strip()
-                        result['applicant_name'] = re.sub(r'[\s\n]+', ' ', result['applicant_name']).strip()
-                        if len(result['applicant_name']) > 2:
-                            break
+                # استخراج الاسم
+                name_match = re.search(r'الاسم\s*</label>.*?<div[^>]*>\s*([^\n<]+?)\s*</div>', html_text, re.IGNORECASE | re.DOTALL)
+                if name_match:
+                    result['applicant_name'] = name_match.group(1).strip()
                 
                 # استخراج رقم الجواز
-                passport_patterns = [
-                    r'رقم الجواز[:\s]*(\d{7,12})',
-                    r'Passport Number[:\s]*(\d{7,12})'
-                ]
-                for pattern in passport_patterns:
-                    match = re.search(pattern, html_text, re.I)
-                    if match:
-                        result['passport_number'] = match.group(1).strip()
-                        break
+                passport_match = re.search(r'رقم الجواز\s*</label>.*?<div[^>]*>\s*(\d{7,12})\s*</div>', html_text, re.IGNORECASE | re.DOTALL)
+                if passport_match:
+                    result['passport_number'] = passport_match.group(1).strip()
+                    
             else:
-                # غير مؤشر
                 result['status'] = 'غير مؤشر'
-            
+                # حتى لو غير مؤشر، نحاول استخراج الاسم ورقم الجواز للعرض في الجدول
+                name_match = re.search(r'الاسم\s*</label>.*?<div[^>]*>\s*([^\n<]+?)\s*</div>', html_text, re.IGNORECASE | re.DOTALL)
+                if name_match:
+                    result['applicant_name'] = name_match.group(1).strip()
+                
+                passport_match = re.search(r'رقم الجواز\s*</label>.*?<div[^>]*>\s*(\d{7,12})\s*</div>', html_text, re.IGNORECASE | re.DOTALL)
+                if passport_match:
+                    result['passport_number'] = passport_match.group(1).strip()
+                    
             return result
         else:
             result['error'] = f'خطأ ({response.status_code})'
