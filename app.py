@@ -13,20 +13,26 @@ import tempfile
 import hashlib
 import gc
 
+# ===== إعداد التطبيق =====
 app = Flask(__name__, template_folder='visa_system/templates', static_folder='visa_system/static')
 CORS(app)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 
+# مفتاح سري للـ sessions
 app.secret_key = 'visa-system-secret-key-2026-xyz'
 
+# بيانات تسجيل الدخول
 VALID_USERNAME = 'زكريا السعدي'
 VALID_PASSWORD_HASH = hashlib.sha256('773983986'.encode()).hexdigest()
 
+# روابط التحقق
 BASE_URL = 'https://visa.mofa.gov.sa/Enjaz/PrintApplication?ApplicationNo={}'
 MEDICAL_URL = 'https://visa.mofa.gov.sa/visaperson/checkmedicalresult'
 
 
+# ===== نظام المصادقة =====
 def login_required(f):
+    """ديكور للتحقق من تسجيل الدخول"""
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if 'logged_in' not in session:
@@ -37,6 +43,7 @@ def login_required(f):
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
+    """صفحة تسجيل الدخول"""
     if request.method == 'POST':
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '').strip()
@@ -58,11 +65,14 @@ def login():
 
 @app.route('/logout')
 def logout():
+    """تسجيل الخروج"""
     session.clear()
     return redirect(url_for('login'))
 
 
+# ===== دالة التحقق من التأشيرة (محسّنة) =====
 def check_visa_status(app_number):
+    """التحقق من حالة التأشيرة برقم الطلب"""
     url = BASE_URL.format(app_number)
     try:
         headers = {
@@ -72,24 +82,69 @@ def check_visa_status(app_number):
 
         if response.status_code == 200:
             html_text = response.text
+            soup = BeautifulSoup(html_text, 'html.parser')
 
+            # طرق متعددة للكشف عن التأشيرة المؤشرة
             has_visa = False
+            
+            # الطريقة 1: البحث عن "تاريخ الإصدار" أو "Issue Date"
             if 'تاريخ الإصدار' in html_text or 'Issue Date' in html_text:
                 has_visa = True
+            
+            # الطريقة 2: البحث عن "رقم المستند"
+            if not has_visa and ('رقم المستند' in html_text or 'Document Number' in html_text):
+                has_visa = True
+            
+            # الطريقة 3: البحث عن صورة شخصية
+            if not has_visa:
+                images = soup.find_all('img')
+                for img in images:
+                    if img.get('src') and len(images) > 0:
+                        has_visa = True
+                        break
+            
+            # الطريقة 4: البحث عن 3 مؤشرات على الأقل
+            if not has_visa:
+                visa_indicators = [
+                    'نوع التأشيرة',
+                    'اسم الشخص',
+                    'رقم الجواز',
+                    'تاريخ الطلب',
+                    'Visa Type',
+                    'Passport Number'
+                ]
+                count = sum(1 for indicator in visa_indicators if indicator in html_text)
+                if count >= 3:
+                    has_visa = True
 
             if has_visa:
                 issue_date = "غير متوفر"
                 visa_type = "غير محدد"
 
+                # البحث عن تاريخ الإصدار
                 date_pattern = re.compile(r'تاريخ الإصدار[:\s]+(\d{2}[/\-]\d{2}[/\-]\d{4})', re.I)
                 match = date_pattern.search(html_text)
                 if match:
                     issue_date = match.group(1)
+                
+                # إذا لم نجد تاريخ الإصدار، ابحث عن تاريخ الطلب
+                if issue_date == "غير متوفر":
+                    request_date_pattern = re.compile(r'تاريخ الطلب[:\s]+(\d{2}[/\-]\d{2}[/\-]\d{4})', re.I)
+                    request_match = request_date_pattern.search(html_text)
+                    if request_match:
+                        issue_date = request_match.group(1)
 
+                # البحث عن نوع التأشيرة
                 type_pattern = re.compile(r'نوع التأشيرة[:\s]+([^\n<]+)', re.I)
                 type_match = type_pattern.search(html_text)
                 if type_match:
                     visa_type = type_match.group(1).strip()
+                
+                if visa_type == "غير محدد":
+                    en_type_pattern = re.compile(r'Visa Type[:\s]+([^\n<]+)', re.I)
+                    en_type_match = en_type_pattern.search(html_text)
+                    if en_type_match:
+                        visa_type = en_type_match.group(1).strip()
 
                 return 'مؤشر', issue_date, visa_type
             else:
@@ -101,7 +156,9 @@ def check_visa_status(app_number):
         return f'خطأ: {str(e)[:50]}', '', ''
 
 
+# ===== دالة التحقق من الشهادة الصحية =====
 def check_medical_certificate(app_number, passport_number):
+    """التحقق من الشهادة الصحية برقم الطلب ورقم الجواز"""
     try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -169,15 +226,18 @@ def check_medical_certificate(app_number, passport_number):
         }
 
 
+# ===== المسارات الرئيسية =====
 @app.route('/')
 @login_required
 def index():
+    """الصفحة الرئيسية"""
     return render_template('index.html', username=session.get('username', ''))
 
 
 @app.route('/process', methods=['POST'])
 @login_required
 def process_file():
+    """معالجة ملف Excel للتحقق من التأشيرات"""
     if 'file' not in request.files:
         return jsonify({'error': 'لم يتم رفع ملف'}), 400
 
@@ -221,7 +281,7 @@ def process_file():
             else:
                 error_count += 1
 
-            time.sleep(0.5)  # تقليل الوقت
+            time.sleep(0.5)
 
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         output_filename = f'results_{timestamp}.xlsx'
@@ -236,7 +296,7 @@ def process_file():
         with open(output_path, 'wb') as f:
             f.write(output.getvalue())
 
-        gc.collect()  # تحرير الذاكرة
+        gc.collect()
 
         return jsonify({
             'success': True,
@@ -253,6 +313,7 @@ def process_file():
 @app.route('/download/<filename>')
 @login_required
 def download_file(filename):
+    """تحميل ملف النتائج"""
     try:
         tmpdir = tempfile.gettempdir()
         path = os.path.join(tmpdir, filename)
@@ -264,6 +325,7 @@ def download_file(filename):
 @app.route('/stats')
 @login_required
 def get_stats():
+    """إحصائيات النظام"""
     return jsonify({
         'status': 'System is running',
         'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -274,6 +336,7 @@ def get_stats():
 @app.route('/check-medical', methods=['POST'])
 @login_required
 def check_medical():
+    """التحقق من شهادة صحية واحدة"""
     try:
         data = request.get_json()
         
@@ -305,6 +368,7 @@ def check_medical():
 @app.route('/process-medical', methods=['POST'])
 @login_required
 def process_medical_file():
+    """معالجة ملف Excel للتحقق من الشهادات الصحية"""
     if 'file' not in request.files:
         return jsonify({'error': 'لم يتم رفع ملف'}), 400
 
@@ -364,7 +428,7 @@ def process_medical_file():
             else:
                 error_count += 1
 
-            time.sleep(0.5)  # تقليل الوقت
+            time.sleep(0.5)
 
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         output_filename = f'medical_results_{timestamp}.xlsx'
@@ -379,7 +443,7 @@ def process_medical_file():
         with open(output_path, 'wb') as f:
             f.write(output.getvalue())
 
-        gc.collect()  # تحرير الذاكرة
+        gc.collect()
 
         return jsonify({
             'success': True,
@@ -393,6 +457,7 @@ def process_medical_file():
         return jsonify({'error': f'حدث خطأ: {str(e)}'}), 500
 
 
+# ===== تشغيل التطبيق =====
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     debug_mode = os.environ.get('FLASK_DEBUG', 'False').lower() in ('1', 'true', 'yes')
