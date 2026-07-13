@@ -64,27 +64,21 @@ def logout():
     return redirect(url_for('login'))
 
 
-# ===== دالة استخراج بيانات التأشيرة =====
+# ===== دالة استخراج بيانات التأشيرة (القاعدة الدقيقة) =====
 def extract_visa_data(app_number):
     """
-    القاعدة الدقيقة:
-    - إذا وُجد "رقم المستند" في الصفحة = مؤشر ✅
-    - إذا لم يوجد = غير مؤشر 
+    القاعدة الدقيقة 100%:
+    - إذا تواجد النص "رقم المستند" في الصفحة = مؤشر ✅
+    - إذا لم يتواجد = غير مؤشر ❌
     """
     url = BASE_URL.format(app_number)
     
     result = {
         'status': 'غير مؤشر',
-        'document_number': '',
-        'issue_date': '',
-        'visa_type': '',
         'applicant_name': '',
-        'applicant_name_en': '',
         'passport_number': '',
-        'passport_type': '',
-        'entry_count': '',
-        'representation': '',
-        'request_date': '',
+        'visa_type': '',
+        'issue_date': '',
         'error': ''
     }
     
@@ -98,202 +92,67 @@ def extract_visa_data(app_number):
 
         if response.status_code == 200:
             html_text = response.text
-            soup = BeautifulSoup(html_text, 'html.parser')
             
-            # =====  القاعدة الأساسية: البحث عن "رقم المستند" =====
-            has_document_number = False
-            document_number = ''
+            # 🔍 القاعدة الأساسية: البحث عن "رقم المستند"
+            # نبحث عن النص سواء كان داخل label أو أي مكان في الصفحة
+            has_document_number = 'رقم المستند' in html_text or 'Document Number' in html_text
             
-            # الطريقة 1: البحث عن label يحتوي "رقم المستند"
-            for label in soup.find_all('label'):
-                label_text = label.get_text(strip=True)
-                if 'رقم المستند' in label_text or 'Document Number' in label_text:
-                    has_document_number = True
-                    break
-            
-            # الطريقة 2: البحث عن النص في HTML
-            if not has_document_number:
-                if 'رقم المستند' in html_text or 'Document Number' in html_text:
-                    has_document_number = True
-            
-            # الطريقة 3: البحث عن رقم المستند (9-10 أرقام)
-            doc_patterns = [
-                r'رقم المستند[:\s]*(\d{7,12})',
-                r'Document Number[:\s]*(\d{7,12})',
-                r'Document No[:\s]*(\d{7,12})',
-                r'رقم المستند.*?(\d{7,12})'
-            ]
-            
-            for pattern in doc_patterns:
-                match = re.search(pattern, html_text, re.I | re.S)
-                if match:
-                    document_number = match.group(1).strip()
-                    has_document_number = True
-                    break
-            
-            # ===== 🎯 القرار النهائي =====
             if has_document_number:
                 result['status'] = 'مؤشر'
-                result['document_number'] = document_number
                 
                 # استخراج تاريخ الإصدار/الطلب
-                issue_date = ''
                 date_patterns = [
                     r'تاريخ الطلب[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})',
+                    r'تاريخ الإصدار[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})',
                     r'Request Date[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})',
-                    r'تاريخ الطلب.*?(\d{2}[/\-]\d{2}[/\-]\d{4})'
+                    r'Issue Date[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})'
                 ]
-                
                 for pattern in date_patterns:
-                    match = re.search(pattern, html_text, re.I | re.S)
+                    match = re.search(pattern, html_text, re.I)
                     if match:
-                        issue_date = match.group(1).strip()
+                        result['issue_date'] = match.group(1).strip()
                         break
                 
-                if not issue_date:
-                    issue_patterns = [
-                        r'تاريخ الإصدار[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})',
-                        r'Issue Date[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})'
-                    ]
-                    
-                    for pattern in issue_patterns:
-                        match = re.search(pattern, html_text, re.I | re.S)
-                        if match:
-                            issue_date = match.group(1).strip()
-                            break
-                
-                result['issue_date'] = issue_date
-                
                 # استخراج نوع التأشيرة
-                visa_type = ''
                 type_patterns = [
                     r'نوع التأشيرة[:\s]*([^\n<]+?)(?:\s*(?:عدد|اسم|الممثلة|<))',
-                    r'Visa Type[:\s]*([^\n<]+?)(?:\s*(?:Entry|Name|<))',
-                    r'نوع التأشيرة.*?(\w+)'
+                    r'Visa Type[:\s]*([^\n<]+?)(?:\s*(?:Entry|Name|<))'
                 ]
-                
                 for pattern in type_patterns:
-                    match = re.search(pattern, html_text, re.I | re.S)
+                    match = re.search(pattern, html_text, re.I)
                     if match:
                         visa_type = match.group(1).strip()
                         visa_type = re.sub(r'[\s\n]+', ' ', visa_type).strip()
-                        if visa_type and len(visa_type) > 1 and len(visa_type) < 50:
+                        if visa_type and len(visa_type) > 1:
+                            result['visa_type'] = visa_type
                             break
                 
-                result['visa_type'] = visa_type
-                
-                # استخراج اسم الشخص (عربي)
-                applicant_name = ''
+                # استخراج اسم الشخص
                 name_patterns = [
                     r'الاسم[:\s]*([^\n<]+?)(?:\s*(?:Name|<))',
                     r'اسم الشخص.*?الطالبية[:\s]*([^\n<]+)',
                     r'Applicant Name[:\s]*([^\n<]+)'
                 ]
-                
                 for pattern in name_patterns:
-                    match = re.search(pattern, html_text, re.I | re.S)
+                    match = re.search(pattern, html_text, re.I)
                     if match:
-                        applicant_name = match.group(1).strip()
-                        applicant_name = re.sub(r'[\s\n]+', ' ', applicant_name).strip()
-                        if applicant_name and len(applicant_name) > 2:
+                        result['applicant_name'] = match.group(1).strip()
+                        result['applicant_name'] = re.sub(r'[\s\n]+', ' ', result['applicant_name']).strip()
+                        if len(result['applicant_name']) > 2:
                             break
-                
-                result['applicant_name'] = applicant_name
-                
-                # استخراج اسم الشخص (إنجليزي)
-                applicant_name_en = ''
-                name_en_patterns = [
-                    r'Name[:\s]*([A-Z\s]+?)(?:\s*(?:نوع|<|$))',
-                    r'Name[:\s]*([A-Z][A-Z\s]+)'
-                ]
-                
-                for pattern in name_en_patterns:
-                    match = re.search(pattern, html_text)
-                    if match:
-                        applicant_name_en = match.group(1).strip()
-                        if applicant_name_en and len(applicant_name_en) > 2:
-                            break
-                
-                result['applicant_name_en'] = applicant_name_en
                 
                 # استخراج رقم الجواز
-                passport_number = ''
                 passport_patterns = [
                     r'رقم الجواز[:\s]*(\d{7,12})',
-                    r'Passport Number[:\s]*(\d{7,12})',
-                    r'رقم الجواز.*?(\d{7,12})'
+                    r'Passport Number[:\s]*(\d{7,12})'
                 ]
-                
                 for pattern in passport_patterns:
-                    match = re.search(pattern, html_text, re.I | re.S)
+                    match = re.search(pattern, html_text, re.I)
                     if match:
-                        passport_number = match.group(1).strip()
+                        result['passport_number'] = match.group(1).strip()
                         break
-                
-                result['passport_number'] = passport_number
-                
-                # استخراج نوع الجواز
-                passport_type = ''
-                passport_type_patterns = [
-                    r'نوع الجواز[:\s]*([^\n<]+)',
-                    r'Passport Type[:\s]*([^\n<]+)'
-                ]
-                
-                for pattern in passport_type_patterns:
-                    match = re.search(pattern, html_text, re.I | re.S)
-                    if match:
-                        passport_type = match.group(1).strip()
-                        break
-                
-                result['passport_type'] = passport_type
-                
-                # استخراج عدد مرات الدخول
-                entry_count = ''
-                entry_patterns = [
-                    r'عدد مرات الدخول[:\s]*([^\n<]+)',
-                    r'Number of Entries[:\s]*([^\n<]+)'
-                ]
-                
-                for pattern in entry_patterns:
-                    match = re.search(pattern, html_text, re.I | re.S)
-                    if match:
-                        entry_count = match.group(1).strip()
-                        break
-                
-                result['entry_count'] = entry_count
-                
-                # استخراج الممثلة في
-                representation = ''
-                rep_patterns = [
-                    r'الممثلة في[:\s]*([^\n<]+)',
-                    r'Represented in[:\s]*([^\n<]+)'
-                ]
-                
-                for pattern in rep_patterns:
-                    match = re.search(pattern, html_text, re.I | re.S)
-                    if match:
-                        representation = match.group(1).strip()
-                        break
-                
-                result['representation'] = representation
-                
-                # استخراج تاريخ الطلب
-                request_date = ''
-                req_date_patterns = [
-                    r'تاريخ الطلب[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})',
-                    r'Request Date[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})'
-                ]
-                
-                for pattern in req_date_patterns:
-                    match = re.search(pattern, html_text, re.I | re.S)
-                    if match:
-                        request_date = match.group(1).strip()
-                        break
-                
-                result['request_date'] = request_date
-                
             else:
-                # غير مؤشر - لا يوجد رقم مستند
+                # غير مؤشر
                 result['status'] = 'غير مؤشر'
             
             return result
@@ -325,54 +184,19 @@ def check_medical_certificate(app_number, passport_number):
         
         if response.status_code == 200:
             html_text = response.text
-            
-            has_certificate = False
-            status = "غير متوفر"
-            message = ""
-            
-            if 'الشهادة الصحية' in html_text or 'Medical Certificate' in html_text:
-                if 'تم إصدار' in html_text or 'Issued' in html_text:
-                    has_certificate = True
-                    status = "تم الإصدار"
-                elif 'لم يتم' in html_text or 'Not Issued' in html_text:
-                    status = "لم يتم الإصدار"
-                else:
-                    status = "موجود"
-                    has_certificate = True
-            
-            details = {}
-            
-            date_pattern = re.compile(r'تاريخ الإصدار[:\s]+(\d{2}[/\-]\d{2}[/\-]\d{4})', re.I)
-            date_match = date_pattern.search(html_text)
-            if date_match:
-                details['issue_date'] = date_match.group(1)
-            
-            health_pattern = re.compile(r'الحالة[:\s]+([^\n<]+)', re.I)
-            health_match = health_pattern.search(html_text)
-            if health_match:
-                details['health_status'] = health_match.group(1).strip()
+            has_certificate = 'تم إصدار' in html_text or 'Issued' in html_text or 'موجود' in html_text
             
             return {
                 'has_certificate': has_certificate,
-                'status': status,
-                'details': details,
-                'message': message
+                'status': "تم الإصدار" if has_certificate else "لم يتم الإصدار",
+                'details': {},
+                'message': ''
             }
         else:
-            return {
-                'has_certificate': False,
-                'status': f'خطأ ({response.status_code})',
-                'details': {},
-                'message': 'فشل الاتصال بالخادم'
-            }
+            return {'has_certificate': False, 'status': f'خطأ ({response.status_code})', 'details': {}, 'message': ''}
             
     except Exception as e:
-        return {
-            'has_certificate': False,
-            'status': 'خطأ',
-            'details': {},
-            'message': f'خطأ: {str(e)[:50]}'
-        }
+        return {'has_certificate': False, 'status': 'خطأ', 'details': {}, 'message': f'خطأ: {str(e)[:50]}'}
 
 
 # ===== المسارات الرئيسية =====
@@ -385,7 +209,7 @@ def index():
 @app.route('/process', methods=['POST'])
 @login_required
 def process_file():
-    """معالجة ملف Excel - استخراج البيانات بالصيغة المطلوبة"""
+    """معالجة ملف Excel - الحفاظ على الأعمدة الأصلية وإضافة الأعمدة الجديدة فقط"""
     if 'file' not in request.files:
         return jsonify({'error': 'لم يتم رفع ملف'}), 400
 
@@ -397,6 +221,7 @@ def process_file():
         return jsonify({'error': 'الرجاء رفع ملف Excel فقط'}), 400
 
     try:
+        # قراءة الملف الأصلي كما هو
         df = pd.read_excel(file)
 
         # البحث عن عمود رقم الطلب
@@ -409,8 +234,12 @@ def process_file():
         if not col_name:
             return jsonify({'error': 'لم يتم العثور على عمود "رقم الطلب"'}), 400
 
-        # قائمة لتخزين النتائج
-        results = []
+        # إضافة الأعمدة الجديدة إلى الملف الأصلي (بدون حذف أي بيانات موجودة)
+        df['الاسم'] = ''
+        df['رقم الجواز'] = ''
+        df['نوع التأشيرة'] = ''
+        df['حالة التأشيرة'] = ''
+        df['تاريخ الإصدار'] = ''
 
         total = len(df)
         success_count = 0
@@ -422,17 +251,12 @@ def process_file():
             # استخراج البيانات
             visa_data = extract_visa_data(app_no)
             
-            # إضافة النتيجة
-            result_row = {
-                'الاسم': visa_data['applicant_name'],
-                'رقم الجواز': visa_data['passport_number'],
-                'رقم الطلب': app_no,
-                'نوع التأشيرة': visa_data['visa_type'],
-                'حالة التأشيرة': visa_data['status'],
-                'تاريخ الإصدار': visa_data['issue_date']
-            }
-            
-            results.append(result_row)
+            # تعبئة الأعمدة الجديدة في الصف الحالي
+            df.at[index, 'الاسم'] = visa_data['applicant_name']
+            df.at[index, 'رقم الجواز'] = visa_data['passport_number']
+            df.at[index, 'نوع التأشيرة'] = visa_data['visa_type']
+            df.at[index, 'حالة التأشيرة'] = visa_data['status']
+            df.at[index, 'تاريخ الإصدار'] = visa_data['issue_date']
 
             if visa_data['status'] == 'مؤشر':
                 success_count += 1
@@ -441,19 +265,13 @@ def process_file():
 
             time.sleep(0.5)
 
-        # إنشاء DataFrame من النتائج بالترتيب المطلوب
-        output_df = pd.DataFrame(results)
-        
-        # ترتيب الأعمدة كما في الصورة
-        column_order = ['الاسم', 'رقم الجواز', 'رقم الطلب', 'نوع التأشيرة', 'حالة التأشيرة', 'تاريخ الإصدار']
-        output_df = output_df[column_order]
-
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         output_filename = f'results_{timestamp}.xlsx'
 
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            output_df.to_excel(writer, index=False, sheet_name='النتائج')
+            # حفظ الملف مع جميع الأعمدة الأصلية + الأعمدة الجديدة المضافة
+            df.to_excel(writer, index=False, sheet_name='النتائج')
         output.seek(0)
 
         tmpdir = tempfile.gettempdir()
@@ -501,28 +319,17 @@ def get_stats():
 def check_medical():
     try:
         data = request.get_json()
-        
         if not data:
             return jsonify({'error': 'لم يتم استلام البيانات'}), 400
         
         app_number = data.get('application_number', '').strip()
         passport_number = data.get('passport_number', '').strip()
         
-        if not app_number:
-            return jsonify({'error': 'رقم الطلب مطلوب'}), 400
-        
-        if not passport_number:
-            return jsonify({'error': 'رقم الجواز مطلوب'}), 400
+        if not app_number or not passport_number:
+            return jsonify({'error': 'رقم الطلب ورقم الجواز مطلوبان'}), 400
         
         result = check_medical_certificate(app_number, passport_number)
-        
-        return jsonify({
-            'success': True,
-            'application_number': app_number,
-            'passport_number': passport_number,
-            'result': result
-        }), 200
-        
+        return jsonify({'success': True, 'result': result}), 200
     except Exception as e:
         return jsonify({'error': f'حدث خطأ: {str(e)}'}), 500
 
@@ -534,61 +341,29 @@ def process_medical_file():
         return jsonify({'error': 'لم يتم رفع ملف'}), 400
 
     file = request.files['file']
-    if file.filename == '':
-        return jsonify({'error': 'لم يتم اختيار ملف'}), 400
-
-    if not file.filename.endswith(('.xlsx', '.xls')):
-        return jsonify({'error': 'الرجاء رفع ملف Excel فقط'}), 400
+    if file.filename == '' or not file.filename.endswith(('.xlsx', '.xls')):
+        return jsonify({'error': 'الرجاء رفع ملف Excel صحيح'}), 400
 
     try:
         df = pd.read_excel(file)
 
-        app_col = None
-        for col in df.columns:
-            if 'رقم الطلب' in str(col) or 'application' in str(col).lower():
-                app_col = col
-                break
+        app_col = next((col for col in df.columns if 'رقم الطلب' in str(col) or 'application' in str(col).lower()), None)
+        passport_col = next((col for col in df.columns if 'رقم الجواز' in str(col) or 'passport' in str(col).lower()), None)
 
-        passport_col = None
-        for col in df.columns:
-            if 'رقم الجواز' in str(col) or 'passport' in str(col).lower():
-                passport_col = col
-                break
-
-        if not app_col:
-            return jsonify({'error': 'لم يتم العثور على عمود "رقم الطلب"'}), 400
-
-        if not passport_col:
-            return jsonify({'error': 'لم يتم العثور على عمود "رقم الجواز"'}), 400
+        if not app_col or not passport_col:
+            return jsonify({'error': 'يجب وجود أعمدة "رقم الطلب" و "رقم الجواز"'}), 400
 
         df['حالة الشهادة الصحية'] = ''
         df['تفاصيل'] = ''
 
         total = len(df)
         success_count = 0
-        error_count = 0
 
         for index, row in df.iterrows():
-            app_no = str(row[app_col]).strip()
-            passport_no = str(row[passport_col]).strip()
-            
-            result = check_medical_certificate(app_no, passport_no)
-            
+            result = check_medical_certificate(str(row[app_col]).strip(), str(row[passport_col]).strip())
             df.at[index, 'حالة الشهادة الصحية'] = result['status']
-            
-            details_text = []
-            if 'issue_date' in result['details']:
-                details_text.append(f"تاريخ الإصدار: {result['details']['issue_date']}")
-            if 'health_status' in result['details']:
-                details_text.append(f"الحالة: {result['details']['health_status']}")
-            
-            df.at[index, 'تفاصيل'] = ' | '.join(details_text) if details_text else result['message']
-
             if result['has_certificate']:
                 success_count += 1
-            else:
-                error_count += 1
-
             time.sleep(0.5)
 
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -607,11 +382,8 @@ def process_medical_file():
         gc.collect()
 
         return jsonify({
-            'success': True,
-            'total': total,
-            'success_count': success_count,
-            'error_count': error_count,
-            'filename': output_filename
+            'success': True, 'total': total, 'success_count': success_count,
+            'error_count': total - success_count, 'filename': output_filename
         }), 200
 
     except Exception as e:
