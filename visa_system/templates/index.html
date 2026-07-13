@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>نظام التحقق من التأشيرات السعودية</title>
+    <title>نظام التحقق من التأشيرات والشهادات الصحية</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -13,7 +13,7 @@
             padding: 20px;
         }
         .container {
-            max-width: 800px;
+            max-width: 900px;
             margin: 0 auto;
             background: white;
             border-radius: 20px;
@@ -31,6 +31,42 @@
             text-align: center;
             margin-bottom: 30px;
         }
+        
+        /* التبويبات */
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 30px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+        .tab {
+            flex: 1;
+            padding: 15px;
+            text-align: center;
+            cursor: pointer;
+            background: #f8f9fa;
+            border-radius: 10px 10px 0 0;
+            font-weight: bold;
+            color: #666;
+            transition: all 0.3s;
+            border: 2px solid transparent;
+        }
+        .tab:hover {
+            background: #f0f2ff;
+        }
+        .tab.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-color: #667eea;
+        }
+        
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        
         .info-box {
             background: #e7f3ff;
             border-right: 4px solid #2196F3;
@@ -70,11 +106,40 @@
             width: 100%;
             font-weight: bold;
             margin-top: 15px;
+            transition: transform 0.2s;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
         }
         .btn:disabled {
             background: #ccc;
             cursor: not-allowed;
+            transform: none;
         }
+        
+        /* نموذج التحقق الفردي */
+        .form-group {
+            margin-bottom: 20px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: bold;
+            color: #333;
+        }
+        .form-group input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+        .form-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
         .progress {
             margin-top: 25px;
             display: none;
@@ -136,58 +201,196 @@
         }
         .success { color: #28a745; }
         .error { color: #dc3545; }
+        
+        /* بطاقة النتيجة */
+        .result-card {
+            background: #f8f9fa;
+            border-right: 4px solid #28a745;
+            padding: 20px;
+            margin-top: 20px;
+            border-radius: 10px;
+        }
+        .result-card.error {
+            border-right-color: #dc3545;
+        }
+        .result-card h4 {
+            color: #333;
+            margin-bottom: 15px;
+        }
+        .result-card p {
+            margin: 8px 0;
+            color: #555;
+        }
+        .result-card strong {
+            color: #667eea;
+        }
+        
+        .download-btn {
+            display: inline-block;
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+            color: white;
+            padding: 12px 30px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: bold;
+            margin-top: 15px;
+            transition: transform 0.2s;
+        }
+        .download-btn:hover {
+            transform: translateY(-2px);
+        }
+        
+        .divider {
+            border-top: 2px dashed #e0e0e0;
+            margin: 30px 0;
+        }
+        
+        .section-title {
+            color: #333;
+            font-size: 20px;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #667eea;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🛂 نظام التحقق من التأشيرات</h1>
-        <p class="subtitle">نظام آلي للتحقق من حالة التأشيرات السعودية</p>
+        <h1>🛂 نظام التحقق من التأشيرات والشهادات الصحية</h1>
+        <p class="subtitle">نظام آلي للتحقق من حالة التأشيرات والشهادات الصحية</p>
         
-        <div class="info-box">
-            <strong>📋 تعليمات الاستخدام:</strong><br>
-            ✓ تأكد أن ملف Excel يحتوي على عمود "رقم الطلب"<br>
-            ✓ ارفع الملف واضغط "بدء المعالجة"<br>
-            ✓ انتظر حتى يتم التحقق من جميع الطلبات<br>
-            ✓ سيتم عرض الإحصائيات وتحميل الملف
+        <!-- التبويبات -->
+        <div class="tabs">
+            <div class="tab active" onclick="switchTab('visa')">🛂 التحقق من التأشيرات</div>
+            <div class="tab" onclick="switchTab('medical')">🏥 التحقق من الشهادة الصحية</div>
         </div>
         
-        <div class="upload-box" onclick="document.getElementById('fileInput').click()">
-            <input type="file" id="fileInput" accept=".xlsx,.xls" required>
-            <label for="fileInput" class="upload-label">
-                📁 اضغط هنا لرفع ملف Excel
-            </label>
-            <div id="fileName" style="margin-top: 10px; color: #28a745; font-weight: bold;"></div>
+        <!-- تبويب التأشيرات -->
+        <div class="tab-content active" id="visa-tab">
+            <div class="info-box">
+                <strong>📋 تعليمات الاستخدام:</strong><br>
+                ✓ تأكد أن ملف Excel يحتوي على عمود "رقم الطلب"<br>
+                ✓ ارفع الملف واضغط "بدء المعالجة"<br>
+                ✓ انتظر حتى يتم التحقق من جميع الطلبات<br>
+                ✓ سيتم عرض الإحصائيات وتحميل الملف
+            </div>
+            
+            <div class="upload-box" onclick="document.getElementById('fileInput').click()">
+                <input type="file" id="fileInput" accept=".xlsx,.xls" required>
+                <label for="fileInput" class="upload-label">
+                    📁 اضغط هنا لرفع ملف Excel
+                </label>
+                <div id="fileName" style="margin-top: 10px; color: #28a745; font-weight: bold;"></div>
+            </div>
+            
+            <button class="btn" id="startBtn" onclick="startProcessing()">
+                🚀 بدء المعالجة
+            </button>
+            
+            <div class="progress" id="progress">
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progressFill">0%</div>
+                </div>
+                <div class="stats">
+                    <div class="stat-box">
+                        <div class="stat-number" id="totalStat">0</div>
+                        <div class="stat-label">الإجمالي</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-number" id="successStat" style="color: #28a745;">0</div>
+                        <div class="stat-label">مؤشر</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-number" id="errorStat" style="color: #dc3545;">0</div>
+                        <div class="stat-label">غير مؤشر</div>
+                    </div>
+                </div>
+                <div class="log" id="log"></div>
+            </div>
         </div>
         
-        <button class="btn" id="startBtn" onclick="startProcessing()">
-            🚀 بدء المعالجة
-        </button>
-        
-        <div class="progress" id="progress">
-            <div class="progress-bar">
-                <div class="progress-fill" id="progressFill">0%</div>
+        <!-- تبويب الشهادة الصحية -->
+        <div class="tab-content" id="medical-tab">
+            <div class="info-box">
+                <strong>📋 تعليمات الاستخدام:</strong><br>
+                ✓ هذه الميزة للتحقق من الشهادة الصحية (لنوع عمل وإقامة)<br>
+                ✓ يمكنك التحقق من شهادة واحدة أو ملف Excel كامل<br>
+                ✓ ملف Excel يجب أن يحتوي على عمودي: "رقم الطلب" و "رقم الجواز"
             </div>
-            <div class="stats">
-                <div class="stat-box">
-                    <div class="stat-number" id="totalStat">0</div>
-                    <div class="stat-label">الإجمالي</div>
-                </div>
-                <div class="stat-box">
-                    <div class="stat-number" id="successStat" style="color: #28a745;">0</div>
-                    <div class="stat-label">مؤشر</div>
-                </div>
-                <div class="stat-box">
-                    <div class="stat-number" id="errorStat" style="color: #dc3545;">0</div>
-                    <div class="stat-label">غير مؤشر</div>
-                </div>
+            
+            <!-- التحقق الفردي -->
+            <h3 class="section-title">🔍 التحقق من شهادة واحدة</h3>
+            <div class="form-group">
+                <label>رقم الطلب:</label>
+                <input type="text" id="medicalAppNumber" placeholder="أدخل رقم الطلب">
             </div>
-            <div class="log" id="log"></div>
+            <div class="form-group">
+                <label>رقم الجواز:</label>
+                <input type="text" id="medicalPassportNumber" placeholder="أدخل رقم الجواز">
+            </div>
+            <button class="btn" id="checkMedicalBtn" onclick="checkMedicalSingle()">
+                🔎 تحقق من الشهادة
+            </button>
+            <div id="medicalResult"></div>
+            
+            <div class="divider"></div>
+            
+            <!-- التحقق من ملف Excel -->
+            <h3 class="section-title">📊 التحقق من ملف Excel</h3>
+            <div class="upload-box" onclick="document.getElementById('medicalFileInput').click()">
+                <input type="file" id="medicalFileInput" accept=".xlsx,.xls" required>
+                <label for="medicalFileInput" class="upload-label">
+                    📁 اضغط هنا لرفع ملف Excel
+                </label>
+                <div id="medicalFileName" style="margin-top: 10px; color: #28a745; font-weight: bold;"></div>
+            </div>
+            
+            <button class="btn" id="processMedicalBtn" onclick="startMedicalProcessing()">
+                🚀 بدء معالجة الشهادات الصحية
+            </button>
+            
+            <div class="progress" id="medicalProgress">
+                <div class="progress-bar">
+                    <div class="progress-fill" id="medicalProgressFill">0%</div>
+                </div>
+                <div class="stats">
+                    <div class="stat-box">
+                        <div class="stat-number" id="medicalTotalStat">0</div>
+                        <div class="stat-label">الإجمالي</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-number" id="medicalSuccessStat" style="color: #28a745;">0</div>
+                        <div class="stat-label">شهادات موجودة</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-number" id="medicalErrorStat" style="color: #dc3545;">0</div>
+                        <div class="stat-label">غير موجودة</div>
+                    </div>
+                </div>
+                <div class="log" id="medicalLog"></div>
+            </div>
         </div>
     </div>
 
     <script>
         let selectedFile = null;
+        let selectedMedicalFile = null;
         
+        // التبديل بين التبويبات
+        function switchTab(tabName) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            
+            if (tabName === 'visa') {
+                document.querySelectorAll('.tab')[0].classList.add('active');
+                document.getElementById('visa-tab').classList.add('active');
+            } else {
+                document.querySelectorAll('.tab')[1].classList.add('active');
+                document.getElementById('medical-tab').classList.add('active');
+            }
+        }
+        
+        // اختيار ملف التأشيرات
         document.getElementById('fileInput').addEventListener('change', function(e) {
             if (e.target.files.length > 0) {
                 selectedFile = e.target.files[0];
@@ -195,8 +398,17 @@
             }
         });
         
-        function addLog(message, type = 'info') {
-            const log = document.getElementById('log');
+        // اختيار ملف الشهادات الصحية
+        document.getElementById('medicalFileInput').addEventListener('change', function(e) {
+            if (e.target.files.length > 0) {
+                selectedMedicalFile = e.target.files[0];
+                document.getElementById('medicalFileName').textContent = '✓ ' + selectedMedicalFile.name;
+            }
+        });
+        
+        // إضافة سجل
+        function addLog(message, type = 'info', logId = 'log') {
+            const log = document.getElementById(logId);
             const item = document.createElement('div');
             item.className = 'log-item ' + type;
             item.textContent = message;
@@ -204,6 +416,7 @@
             log.scrollTop = log.scrollHeight;
         }
         
+        // معالجة ملف التأشيرات
         async function startProcessing() {
             if (!selectedFile) {
                 alert('الرجاء اختيار ملف أولاً');
@@ -250,6 +463,116 @@
                 alert('حدث خطأ: ' + error.message);
             } finally {
                 document.getElementById('startBtn').disabled = false;
+            }
+        }
+        
+        // التحقق من شهادة صحية واحدة
+        async function checkMedicalSingle() {
+            const appNumber = document.getElementById('medicalAppNumber').value.trim();
+            const passportNumber = document.getElementById('medicalPassportNumber').value.trim();
+            
+            if (!appNumber || !passportNumber) {
+                alert('الرجاء إدخال رقم الطلب ورقم الجواز');
+                return;
+            }
+            
+            const resultDiv = document.getElementById('medicalResult');
+            resultDiv.innerHTML = '<div class="result-card"><p>جاري التحقق... ⏳</p></div>';
+            
+            document.getElementById('checkMedicalBtn').disabled = true;
+            
+            try {
+                const response = await fetch('/check-medical', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        application_number: appNumber,
+                        passport_number: passportNumber
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    const result = data.result;
+                    let detailsHtml = '';
+                    
+                    if (result.details && result.details.issue_date) {
+                        detailsHtml += `<p><strong>📅 تاريخ الإصدار:</strong> ${result.details.issue_date}</p>`;
+                    }
+                    if (result.details && result.details.health_status) {
+                        detailsHtml += `<p><strong>💊 الحالة الصحية:</strong> ${result.details.health_status}</p>`;
+                    }
+                    
+                    const cardClass = result.has_certificate ? '' : 'error';
+                    
+                    resultDiv.innerHTML = `
+                        <div class="result-card ${cardClass}">
+                            <h4>📋 نتيجة التحقق</h4>
+                            <p><strong>🔢 رقم الطلب:</strong> ${data.application_number}</p>
+                            <p><strong>🛂 رقم الجواز:</strong> ${data.passport_number}</p>
+                            <p><strong>✅ الحالة:</strong> ${result.status}</p>
+                            ${detailsHtml}
+                            ${result.message ? `<p><strong>📝 ملاحظة:</strong> ${result.message}</p>` : ''}
+                        </div>
+                    `;
+                } else {
+                    resultDiv.innerHTML = `<div class="result-card error"><p class="error">❌ خطأ: ${data.error}</p></div>`;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `<div class="result-card error"><p class="error">❌ حدث خطأ: ${error.message}</p></div>`;
+            } finally {
+                document.getElementById('checkMedicalBtn').disabled = false;
+            }
+        }
+        
+        // معالجة ملف الشهادات الصحية
+        async function startMedicalProcessing() {
+            if (!selectedMedicalFile) {
+                alert('الرجاء اختيار ملف أولاً');
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('file', selectedMedicalFile);
+            
+            document.getElementById('processMedicalBtn').disabled = true;
+            document.getElementById('medicalProgress').style.display = 'block';
+            document.getElementById('medicalLog').innerHTML = '';
+            
+            addLog('بدء معالجة الشهادات الصحية...', 'info', 'medicalLog');
+            
+            try {
+                const response = await fetch('/process-medical', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    addLog(`تمت المعالجة بنجاح!`, 'success', 'medicalLog');
+                    addLog(`الإجمالي: ${data.total}`, 'info', 'medicalLog');
+                    addLog(`شهادات موجودة: ${data.success_count}`, 'success', 'medicalLog');
+                    addLog(`غير موجودة: ${data.error_count}`, 'error', 'medicalLog');
+                    
+                    document.getElementById('medicalTotalStat').textContent = data.total;
+                    document.getElementById('medicalSuccessStat').textContent = data.success_count;
+                    document.getElementById('medicalErrorStat').textContent = data.error_count;
+                    document.getElementById('medicalProgressFill').style.width = '100%';
+                    document.getElementById('medicalProgressFill').textContent = '100% - تم الانتهاء';
+                    
+                    alert('✅ تم الانتهاء! سيتم تحميل الملف');
+                    window.location.href = '/download/' + data.filename;
+                } else {
+                    addLog('خطأ: ' + data.error, 'error', 'medicalLog');
+                    alert('حدث خطأ: ' + data.error);
+                }
+            } catch (error) {
+                addLog('خطأ في الاتصال: ' + error.message, 'error', 'medicalLog');
+                alert('حدث خطأ: ' + error.message);
+            } finally {
+                document.getElementById('processMedicalBtn').disabled = false;
             }
         }
     </script>
