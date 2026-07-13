@@ -3,7 +3,7 @@ from flask_cors import CORS
 from functools import wraps
 import pandas as pd
 import requests
-import re
+from bs4 import BeautifulSoup
 import time
 import os
 from datetime import datetime
@@ -21,7 +21,6 @@ VALID_USERNAME = 'زكريا السعدي'
 VALID_PASSWORD_HASH = hashlib.sha256('773983986'.encode()).hexdigest()
 
 BASE_URL = 'https://visa.mofa.gov.sa/Enjaz/PrintApplication?ApplicationNo={}'
-MEDICAL_URL = 'https://visa.mofa.gov.sa/visaperson/checkmedicalcert'
 
 def login_required(f):
     @wraps(f)
@@ -50,34 +49,37 @@ def logout():
     session.clear()
     return redirect(url_for('login'))
 
-# ===== الدالة البسيطة جداً =====
+# ===== الدالة البسيطة والموثوقة =====
 def check_visa_status(app_number):
     """
-    فقط نتحقق من وجود رقم المستند
-    إذا وجد = مؤشر
-    إذا لم يوجد = غير مؤشر
+    بسيط جداً: نبحث عن label يحتوي على "رقم المستند"
+    إذا وُجد = مؤشر
+    إذا لم يُوجد = غير مؤشر
     """
     url = BASE_URL.format(app_number)
     
     try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'text/html,application/xhtml+xml',
+            'Accept-Language': 'ar-SA,ar;q=0.9'
+        }
         response = requests.get(url, headers=headers, timeout=30)
         response.encoding = 'utf-8'
         
         if response.status_code == 200:
-            html_text = response.text
+            # استخدام BeautifulSoup للبحث عن label
+            soup = BeautifulSoup(response.text, 'html.parser')
             
-            # 🔥 البحث عن: رقم المستند متبوعاً برقم (7-12 رقم)
-            # هذا النمط يوجد فقط في التأشيرات المؤشرة
-            pattern = r'رقم المستند\s*</label>.*?<div[^>]*>\s*(\d{7,12})\s*</div>'
-            match = re.search(pattern, html_text, re.IGNORECASE | re.DOTALL)
+            # البحث عن جميع labels
+            for label in soup.find_all('label'):
+                label_text = label.get_text(strip=True)
+                if 'رقم المستند' in label_text:
+                    # وُجد "رقم المستند" = مؤشر
+                    return 'مؤشر'
             
-            if match:
-                # وُجد رقم المستند = مؤشر
-                return 'مؤشر'
-            else:
-                # لم يُعثر على رقم المستند = غير مؤشر
-                return 'غير مؤشر'
+            # لم يُعثر على "رقم المستند" = غير مؤشر
+            return 'غير مؤشر'
         else:
             return 'خطأ اتصال'
             
@@ -167,21 +169,6 @@ def download_file(filename):
 @login_required
 def get_stats():
     return jsonify({'status': 'running', 'user': session.get('username', '')})
-
-@app.route('/check-medical', methods=['POST'])
-@login_required
-def check_medical():
-    data = request.get_json() or {}
-    app_no = data.get('application_number', '').strip()
-    pass_no = data.get('passport_number', '').strip()
-    if not app_no or not pass_no:
-        return jsonify({'error': 'البيانات ناقصة'}), 400
-    return jsonify({'success': True, 'result': {'status': 'check_medical'}}), 200
-
-@app.route('/process-medical', methods=['POST'])
-@login_required
-def process_medical_file():
-    return jsonify({'message': 'coming soon'}), 200
 
 if __name__ == '__main__':
     app.run(debug=False, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
