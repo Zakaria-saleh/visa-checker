@@ -1,5 +1,6 @@
-from flask import Flask, render_template, request, send_file, jsonify
+from flask import Flask, render_template, request, send_file, jsonify, session, redirect, url_for
 from flask_cors import CORS
+from functools import wraps
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
@@ -9,15 +10,68 @@ import os
 from datetime import datetime
 import io
 import tempfile
+import hashlib
 
 app = Flask(__name__, template_folder='visa_system/templates', static_folder='visa_system/static')
 CORS(app)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 
+# 🔐 مفتاح سري للـ sessions (مهم جداً!)
+app.secret_key = 'visa-system-secret-key-2026-xyz'
+
+# 🔐 بيانات تسجيل الدخول (مشفرة)
+# اسم المستخدم: زكريا السعدي
+# كلمة السر: 773983986
+VALID_USERNAME = 'زكريا السعدي'
+VALID_PASSWORD_HASH = hashlib.sha256('773983986'.encode()).hexdigest()
+
 BASE_URL = 'https://visa.mofa.gov.sa/Enjaz/PrintApplication?ApplicationNo={}'
 MEDICAL_URL = 'https://visa.mofa.gov.sa/visaperson/checkmedicalresult'
 
 
+# ===== نظام المصادقة (Authentication) =====
+def login_required(f):
+    """ديكور للتحقق من تسجيل الدخول"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'logged_in' not in session:
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    """صفحة تسجيل الدخول"""
+    if request.method == 'POST':
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '').strip()
+        
+        # التحقق من البيانات
+        password_hash = hashlib.sha256(password.encode()).hexdigest()
+        
+        if username == VALID_USERNAME and password_hash == VALID_PASSWORD_HASH:
+            session['logged_in'] = True
+            session['username'] = username
+            return redirect(url_for('index'))
+        else:
+            return render_template('login.html', error='اسم المستخدم أو كلمة السر غير صحيحة')
+    
+    # إذا كان مسجل دخول بالفعل
+    if 'logged_in' in session:
+        return redirect(url_for('index'))
+    
+    return render_template('login.html', error=None)
+
+
+@app.route('/logout')
+def logout():
+    """تسجيل الخروج"""
+    session.clear()
+    return redirect(url_for('login'))
+
+
+# ===== الدوال المساعدة =====
 def check_visa_status(app_number):
     url = BASE_URL.format(app_number)
     try:
@@ -67,11 +121,10 @@ def check_medical_certificate(app_number, passport_number):
             'Referer': MEDICAL_URL
         }
         
-        # البيانات المطلوبة
         data = {
             'ApplicationNo': app_number,
             'PassportNo': passport_number,
-            'CaptchaCode': ''  # قد نحتاج captcha
+            'CaptchaCode': ''
         }
         
         response = requests.post(MEDICAL_URL, data=data, headers=headers, timeout=15)
@@ -80,12 +133,10 @@ def check_medical_certificate(app_number, passport_number):
             html_text = response.text
             soup = BeautifulSoup(html_text, 'html.parser')
             
-            # البحث عن نتائج الشهادة الصحية
             has_certificate = False
             status = "غير متوفر"
             message = ""
             
-            # البحث عن نصوص تدل على وجود شهادة
             if 'الشهادة الصحية' in html_text or 'Medical Certificate' in html_text:
                 if 'تم إصدار' in html_text or 'Issued' in html_text:
                     has_certificate = True
@@ -96,16 +147,13 @@ def check_medical_certificate(app_number, passport_number):
                     status = "موجود"
                     has_certificate = True
             
-            # استخراج معلومات إضافية
             details = {}
             
-            # البحث عن تاريخ الإصدار
             date_pattern = re.compile(r'تاريخ الإصدار[:\s]+(\d{2}[/\-]\d{2}[/\-]\d{4})', re.I)
             date_match = date_pattern.search(html_text)
             if date_match:
                 details['issue_date'] = date_match.group(1)
             
-            # البحث عن الحالة الصحية
             health_pattern = re.compile(r'الحالة[:\s]+([^\n<]+)', re.I)
             health_match = health_pattern.search(html_text)
             if health_match:
@@ -134,12 +182,15 @@ def check_medical_certificate(app_number, passport_number):
         }
 
 
+# ===== المسارات المحمية =====
 @app.route('/')
+@login_required
 def index():
-    return render_template('index.html')
+    return render_template('index.html', username=session.get('username', ''))
 
 
 @app.route('/process', methods=['POST'])
+@login_required
 def process_file():
     if 'file' not in request.files:
         return jsonify({'error': 'لم يتم رفع ملف'}), 400
@@ -186,7 +237,7 @@ def process_file():
             else:
                 error_count += 1
 
-            time.sleep(2)
+            time.sleep(1)
 
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         output_filename = f'results_{timestamp}.xlsx'
@@ -214,6 +265,7 @@ def process_file():
 
 
 @app.route('/download/<filename>')
+@login_required
 def download_file(filename):
     try:
         tmpdir = tempfile.gettempdir()
@@ -224,17 +276,18 @@ def download_file(filename):
 
 
 @app.route('/stats')
+@login_required
 def get_stats():
     return jsonify({
         'status': 'System is running',
-        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'user': session.get('username', '')
     })
 
 
-# ===== الميزة الجديدة: التحقق من الشهادة الصحية =====
 @app.route('/check-medical', methods=['POST'])
+@login_required
 def check_medical():
-    """التحقق من الشهادة الصحية"""
     try:
         data = request.get_json()
         
@@ -250,7 +303,6 @@ def check_medical():
         if not passport_number:
             return jsonify({'error': 'رقم الجواز مطلوب'}), 400
         
-        # التحقق من الشهادة الصحية
         result = check_medical_certificate(app_number, passport_number)
         
         return jsonify({
@@ -265,8 +317,8 @@ def check_medical():
 
 
 @app.route('/process-medical', methods=['POST'])
+@login_required
 def process_medical_file():
-    """معالجة ملف Excel للتحقق من الشهادات الصحية"""
     if 'file' not in request.files:
         return jsonify({'error': 'لم يتم رفع ملف'}), 400
 
@@ -280,14 +332,12 @@ def process_medical_file():
     try:
         df = pd.read_excel(file)
 
-        # البحث عن عمود رقم الطلب
         app_col = None
         for col in df.columns:
             if 'رقم الطلب' in str(col) or 'application' in str(col).lower():
                 app_col = col
                 break
 
-        # البحث عن عمود رقم الجواز
         passport_col = None
         for col in df.columns:
             if 'رقم الجواز' in str(col) or 'passport' in str(col).lower():
@@ -300,7 +350,6 @@ def process_medical_file():
         if not passport_col:
             return jsonify({'error': 'لم يتم العثور على عمود "رقم الجواز"'}), 400
 
-        # إضافة أعمدة النتائج
         df['حالة الشهادة الصحية'] = ''
         df['تفاصيل'] = ''
 
@@ -329,7 +378,7 @@ def process_medical_file():
             else:
                 error_count += 1
 
-            time.sleep(2)
+            time.sleep(1)
 
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         output_filename = f'medical_results_{timestamp}.xlsx'
