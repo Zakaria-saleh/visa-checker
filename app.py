@@ -18,21 +18,17 @@ app = Flask(__name__, template_folder='visa_system/templates', static_folder='vi
 CORS(app)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 
-# مفتاح سري للـ sessions
 app.secret_key = 'visa-system-secret-key-2026-xyz'
 
-# بيانات تسجيل الدخول
 VALID_USERNAME = 'زكريا السعدي'
 VALID_PASSWORD_HASH = hashlib.sha256('773983986'.encode()).hexdigest()
 
-# روابط التحقق
 BASE_URL = 'https://visa.mofa.gov.sa/Enjaz/PrintApplication?ApplicationNo={}'
 MEDICAL_URL = 'https://visa.mofa.gov.sa/visaperson/checkmedicalresult'
 
 
 # ===== نظام المصادقة =====
 def login_required(f):
-    """ديكور للتحقق من تسجيل الدخول"""
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if 'logged_in' not in session:
@@ -43,7 +39,6 @@ def login_required(f):
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    """صفحة تسجيل الدخول"""
     if request.method == 'POST':
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '').strip()
@@ -65,14 +60,17 @@ def login():
 
 @app.route('/logout')
 def logout():
-    """تسجيل الخروج"""
     session.clear()
     return redirect(url_for('login'))
 
 
-# ===== دالة التحقق من التأشيرة (محسّنة) =====
+# ===== دالة التحقق من التأشيرة (القاعدة الصحيحة) =====
 def check_visa_status(app_number):
-    """التحقق من حالة التأشيرة برقم الطلب"""
+    """
+    القاعدة: 
+    - باركود + رقم المستند = مؤشرة ✅
+    - تاريخ الإصدار بدون باركود = غير مؤشرة ❌
+    """
     url = BASE_URL.format(app_number)
     try:
         headers = {
@@ -84,38 +82,55 @@ def check_visa_status(app_number):
             html_text = response.text
             soup = BeautifulSoup(html_text, 'html.parser')
 
-            # طرق متعددة للكشف عن التأشيرة المؤشرة
-            has_visa = False
+            has_barcode = False
+            has_document_number = False
             
-            # الطريقة 1: البحث عن "تاريخ الإصدار" أو "Issue Date"
-            if 'تاريخ الإصدار' in html_text or 'Issue Date' in html_text:
-                has_visa = True
+            # 1️⃣ البحث عن الباركود
+            barcode_indicators = [
+                'barcode', 'bar-code', 'bar_code',
+                'bcsImg', 'imgBarcode', 'bcImg', 'img-barcode',
+                'bcs', 'bcimg'
+            ]
             
-            # الطريقة 2: البحث عن "رقم المستند"
-            if not has_visa and ('رقم المستند' in html_text or 'Document Number' in html_text):
-                has_visa = True
+            # البحث في الصور
+            for img in soup.find_all('img'):
+                src = img.get('src', '').lower()
+                alt = img.get('alt', '').lower()
+                class_name = ' '.join(img.get('class', [])).lower()
+                id_name = img.get('id', '').lower()
+                
+                for indicator in barcode_indicators:
+                    if indicator in src or indicator in alt or indicator in class_name or indicator in id_name:
+                        has_barcode = True
+                        break
+                
+                if 'bcs' in src or 'barcode' in src or 'bc' in src:
+                    has_barcode = True
             
-            # الطريقة 3: البحث عن صورة شخصية
-            if not has_visa:
-                images = soup.find_all('img')
-                for img in images:
-                    if img.get('src') and len(images) > 0:
-                        has_visa = True
+            # البحث عن SVG
+            for svg in soup.find_all('svg'):
+                if svg.get('class') and any('barcode' in c.lower() for c in svg.get('class', [])):
+                    has_barcode = True
+            
+            # البحث عن div
+            for div in soup.find_all('div'):
+                div_class = ' '.join(div.get('class', [])).lower()
+                div_id = div.get('id', '').lower()
+                for indicator in barcode_indicators:
+                    if indicator in div_class or indicator in div_id:
+                        has_barcode = True
                         break
             
-            # الطريقة 4: البحث عن 3 مؤشرات على الأقل
-            if not has_visa:
-                visa_indicators = [
-                    'نوع التأشيرة',
-                    'اسم الشخص',
-                    'رقم الجواز',
-                    'تاريخ الطلب',
-                    'Visa Type',
-                    'Passport Number'
-                ]
-                count = sum(1 for indicator in visa_indicators if indicator in html_text)
-                if count >= 3:
-                    has_visa = True
+            # 2️⃣ البحث عن "رقم المستند"
+            if 'رقم المستند' in html_text or 'Document Number' in html_text or 'Document No' in html_text:
+                has_document_number = True
+            
+            doc_pattern = re.compile(r'رقم المستند[:\s]+(\d{7,12})', re.I)
+            if doc_pattern.search(html_text):
+                has_document_number = True
+            
+            # 3️ القرار النهائي
+            has_visa = has_barcode or has_document_number
 
             if has_visa:
                 issue_date = "غير متوفر"
@@ -127,7 +142,6 @@ def check_visa_status(app_number):
                 if match:
                     issue_date = match.group(1)
                 
-                # إذا لم نجد تاريخ الإصدار، ابحث عن تاريخ الطلب
                 if issue_date == "غير متوفر":
                     request_date_pattern = re.compile(r'تاريخ الطلب[:\s]+(\d{2}[/\-]\d{2}[/\-]\d{4})', re.I)
                     request_match = request_date_pattern.search(html_text)
@@ -158,7 +172,6 @@ def check_visa_status(app_number):
 
 # ===== دالة التحقق من الشهادة الصحية =====
 def check_medical_certificate(app_number, passport_number):
-    """التحقق من الشهادة الصحية برقم الطلب ورقم الجواز"""
     try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -230,14 +243,12 @@ def check_medical_certificate(app_number, passport_number):
 @app.route('/')
 @login_required
 def index():
-    """الصفحة الرئيسية"""
     return render_template('index.html', username=session.get('username', ''))
 
 
 @app.route('/process', methods=['POST'])
 @login_required
 def process_file():
-    """معالجة ملف Excel للتحقق من التأشيرات"""
     if 'file' not in request.files:
         return jsonify({'error': 'لم يتم رفع ملف'}), 400
 
@@ -313,7 +324,6 @@ def process_file():
 @app.route('/download/<filename>')
 @login_required
 def download_file(filename):
-    """تحميل ملف النتائج"""
     try:
         tmpdir = tempfile.gettempdir()
         path = os.path.join(tmpdir, filename)
@@ -325,7 +335,6 @@ def download_file(filename):
 @app.route('/stats')
 @login_required
 def get_stats():
-    """إحصائيات النظام"""
     return jsonify({
         'status': 'System is running',
         'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -336,7 +345,6 @@ def get_stats():
 @app.route('/check-medical', methods=['POST'])
 @login_required
 def check_medical():
-    """التحقق من شهادة صحية واحدة"""
     try:
         data = request.get_json()
         
@@ -368,7 +376,6 @@ def check_medical():
 @app.route('/process-medical', methods=['POST'])
 @login_required
 def process_medical_file():
-    """معالجة ملف Excel للتحقق من الشهادات الصحية"""
     if 'file' not in request.files:
         return jsonify({'error': 'لم يتم رفع ملف'}), 400
 
@@ -457,7 +464,6 @@ def process_medical_file():
         return jsonify({'error': f'حدث خطأ: {str(e)}'}), 500
 
 
-# ===== تشغيل التطبيق =====
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     debug_mode = os.environ.get('FLASK_DEBUG', 'False').lower() in ('1', 'true', 'yes')
