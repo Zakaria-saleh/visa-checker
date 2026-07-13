@@ -103,7 +103,7 @@ def extract_visa_data(app_number):
             html_text = response.text
             soup = BeautifulSoup(html_text, 'html.parser')
             
-            # 1️⃣ البحث عن رقم المستند (الأسود) - يدل على أنها مؤشرة
+            # 1️ البحث عن رقم المستند (الأسود) - يدل على أنها مؤشرة
             document_number = ''
             
             doc_patterns = [
@@ -154,7 +154,7 @@ def extract_visa_data(app_number):
             
             result['issue_date'] = issue_date
             
-            # 3️ استخراج نوع التأشيرة (الأحمر)
+            # 3️⃣ استخراج نوع التأشيرة (الأحمر)
             visa_type = ''
             
             type_patterns = [
@@ -207,7 +207,7 @@ def extract_visa_data(app_number):
             
             result['applicant_name_en'] = applicant_name_en
             
-            # 6️⃣ استخراج رقم الجواز
+            # 6️ استخراج رقم الجواز
             passport_number = ''
             passport_patterns = [
                 r'رقم الجواز[:\s]*(\d{7,12})',
@@ -223,7 +223,7 @@ def extract_visa_data(app_number):
             
             result['passport_number'] = passport_number
             
-            # 7️⃣ استخراج نوع الجواز
+            # 7️ استخراج نوع الجواز
             passport_type = ''
             passport_type_patterns = [
                 r'نوع الجواز[:\s]*([^\n<]+)',
@@ -372,7 +372,7 @@ def index():
 @app.route('/process', methods=['POST'])
 @login_required
 def process_file():
-    """معالجة ملف Excel - استخراج البيانات المطلوبة فقط"""
+    """معالجة ملف Excel - استخراج البيانات بالصيغة المطلوبة"""
     if 'file' not in request.files:
         return jsonify({'error': 'لم يتم رفع ملف'}), 400
 
@@ -396,13 +396,8 @@ def process_file():
         if not col_name:
             return jsonify({'error': 'لم يتم العثور على عمود "رقم الطلب"'}), 400
 
-        # إضافة الأعمدة المطلوبة فقط
-        df['الاسم'] = ''
-        df['رقم الجواز'] = ''
-        df['رقم الطلب'] = ''
-        df['نوع التأشيرة'] = ''
-        df['حالة التأشيرة'] = ''
-        df['تاريخ الإصدار'] = ''
+        # قائمة لتخزين النتائج
+        results = []
 
         total = len(df)
         success_count = 0
@@ -414,13 +409,17 @@ def process_file():
             # استخراج البيانات
             visa_data = extract_visa_data(app_no)
             
-            # حفظ البيانات المطلوبة فقط
-            df.at[index, 'الاسم'] = visa_data['applicant_name']
-            df.at[index, 'رقم الجواز'] = visa_data['passport_number']
-            df.at[index, 'رقم الطلب'] = app_no
-            df.at[index, 'نوع التأشيرة'] = visa_data['visa_type']
-            df.at[index, 'حالة التأشيرة'] = visa_data['status']
-            df.at[index, 'تاريخ الإصدار'] = visa_data['issue_date']
+            # إضافة النتيجة
+            result_row = {
+                'الاسم': visa_data['applicant_name'],
+                'رقم الجواز': visa_data['passport_number'],
+                'رقم الطلب': app_no,
+                'نوع التأشيرة': visa_data['visa_type'],
+                'حالة التأشيرة': visa_data['status'],
+                'تاريخ الإصدار': visa_data['issue_date']
+            }
+            
+            results.append(result_row)
 
             if visa_data['status'] == 'مؤشر':
                 success_count += 1
@@ -429,12 +428,19 @@ def process_file():
 
             time.sleep(0.5)
 
+        # إنشاء DataFrame من النتائج بالترتيب المطلوب
+        output_df = pd.DataFrame(results)
+        
+        # ترتيب الأعمدة كما في الصورة
+        column_order = ['الاسم', 'رقم الجواز', 'رقم الطلب', 'نوع التأشيرة', 'حالة التأشيرة', 'تاريخ الإصدار']
+        output_df = output_df[column_order]
+
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         output_filename = f'results_{timestamp}.xlsx'
 
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False, sheet_name='النتائج')
+            output_df.to_excel(writer, index=False, sheet_name='النتائج')
         output.seek(0)
 
         tmpdir = tempfile.gettempdir()
