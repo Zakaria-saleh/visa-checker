@@ -111,7 +111,7 @@ def process_file():
                 error_count += 1
 
             # polite delay to avoid hammering the remote server
-            time.sleep(2)
+            time.sleep(1)
 
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         output_filename = f'results_{timestamp}.xlsx'
