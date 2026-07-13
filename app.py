@@ -78,16 +78,16 @@ def extract_visa_data(app_number):
     # بيانات افتراضية
     result = {
         'status': 'غير مؤشر',
-        'document_number': '',      # رقم المستند (أسود) - يدل على أنها مؤشرة
-        'issue_date': '',           # تاريخ الإصدار/الطلب (أصفر)
-        'visa_type': '',            # نوع التأشيرة (أحمر)
-        'applicant_name': '',       # اسم الشخص
-        'applicant_name_en': '',    # اسم الشخص بالإنجليزي
-        'passport_number': '',      # رقم الجواز
-        'passport_type': '',        # نوع الجواز
-        'entry_count': '',          # عدد مرات الدخول
-        'representation': '',       # الممثلة في
-        'request_date': '',         # تاريخ الطلب
+        'document_number': '',
+        'issue_date': '',
+        'visa_type': '',
+        'applicant_name': '',
+        'applicant_name_en': '',
+        'passport_number': '',
+        'passport_type': '',
+        'entry_count': '',
+        'representation': '',
+        'request_date': '',
         'error': ''
     }
     
@@ -103,7 +103,7 @@ def extract_visa_data(app_number):
             html_text = response.text
             soup = BeautifulSoup(html_text, 'html.parser')
             
-            # 🔍 1. البحث عن رقم المستند (الأسود) - يدل على أنها مؤشرة
+            # 1️⃣ البحث عن رقم المستند (الأسود) - يدل على أنها مؤشرة
             document_number = ''
             
             doc_patterns = [
@@ -124,10 +124,9 @@ def extract_visa_data(app_number):
                 result['status'] = 'مؤشر'
                 result['document_number'] = document_number
             
-            # 🔍 2. استخراج تاريخ الإصدار/الطلب (الأصفر)
+            # 2️⃣ استخراج تاريخ الإصدار/الطلب (الأصفر)
             issue_date = ''
             
-            # نبحث عن تاريخ الطلب أولاً (لأنه موجود في الصورة)
             date_patterns = [
                 r'تاريخ الطلب[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})',
                 r'Request Date[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})',
@@ -140,7 +139,6 @@ def extract_visa_data(app_number):
                     issue_date = match.group(1).strip()
                     break
             
-            # إذا لم نجد تاريخ الطلب، نبحث عن تاريخ الإصدار
             if not issue_date:
                 issue_patterns = [
                     r'تاريخ الإصدار[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})',
@@ -156,10 +154,9 @@ def extract_visa_data(app_number):
             
             result['issue_date'] = issue_date
             
-            # 🔍 3. استخراج نوع التأشيرة (الأحمر) - مثل: عمل، زيارة، إلخ
+            # 3️ استخراج نوع التأشيرة (الأحمر)
             visa_type = ''
             
-            # البحث عن "نوع التأشيرة" ثم استخراج القيمة بجانبها
             type_patterns = [
                 r'نوع التأشيرة[:\s]*([^\n<]+?)(?:\s*(?:عدد|اسم|الممثلة|<))',
                 r'Visa Type[:\s]*([^\n<]+?)(?:\s*(?:Entry|Name|<))',
@@ -176,7 +173,7 @@ def extract_visa_data(app_number):
             
             result['visa_type'] = visa_type
             
-            # 🔍 4. استخراج اسم الشخص (عربي)
+            # 4️⃣ استخراج اسم الشخص (عربي)
             applicant_name = ''
             name_patterns = [
                 r'الاسم[:\s]*([^\n<]+?)(?:\s*(?:Name|<))',
@@ -194,7 +191,7 @@ def extract_visa_data(app_number):
             
             result['applicant_name'] = applicant_name
             
-            # 🔍 5. استخراج اسم الشخص (إنجليزي)
+            # 5️⃣ استخراج اسم الشخص (إنجليزي)
             applicant_name_en = ''
             name_en_patterns = [
                 r'Name[:\s]*([A-Z\s]+?)(?:\s*(?:نوع|<|$))',
@@ -210,7 +207,7 @@ def extract_visa_data(app_number):
             
             result['applicant_name_en'] = applicant_name_en
             
-            # 🔍 6. استخراج رقم الجواز
+            # 6️⃣ استخراج رقم الجواز
             passport_number = ''
             passport_patterns = [
                 r'رقم الجواز[:\s]*(\d{7,12})',
@@ -226,7 +223,7 @@ def extract_visa_data(app_number):
             
             result['passport_number'] = passport_number
             
-            # 🔍 7. استخراج نوع الجواز
+            # 7️⃣ استخراج نوع الجواز
             passport_type = ''
             passport_type_patterns = [
                 r'نوع الجواز[:\s]*([^\n<]+)',
@@ -241,7 +238,7 @@ def extract_visa_data(app_number):
             
             result['passport_type'] = passport_type
             
-            # 🔍 8. استخراج عدد مرات الدخول
+            # 8️ استخراج عدد مرات الدخول
             entry_count = ''
             entry_patterns = [
                 r'عدد مرات الدخول[:\s]*([^\n<]+)',
@@ -256,7 +253,7 @@ def extract_visa_data(app_number):
             
             result['entry_count'] = entry_count
             
-            # 🔍 9. استخراج الممثلة في
+            # 9️⃣ استخراج الممثلة في
             representation = ''
             rep_patterns = [
                 r'الممثلة في[:\s]*([^\n<]+)',
@@ -271,21 +268,20 @@ def extract_visa_data(app_number):
             
             result['representation'] = representation
             
-            # 🔍 10. استخراج تاريخ الطلب (إذا لم نستخرجه سابقاً)
-            if not result['request_date']:
-                request_date = ''
-                req_date_patterns = [
-                    r'تاريخ الطلب[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})',
-                    r'Request Date[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})'
-                ]
-                
-                for pattern in req_date_patterns:
-                    match = re.search(pattern, html_text, re.I | re.S)
-                    if match:
-                        request_date = match.group(1).strip()
-                        break
-                
-                result['request_date'] = request_date
+            # 🔟 استخراج تاريخ الطلب
+            request_date = ''
+            req_date_patterns = [
+                r'تاريخ الطلب[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})',
+                r'Request Date[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})'
+            ]
+            
+            for pattern in req_date_patterns:
+                match = re.search(pattern, html_text, re.I | re.S)
+                if match:
+                    request_date = match.group(1).strip()
+                    break
+            
+            result['request_date'] = request_date
             
             return result
         else:
@@ -376,7 +372,7 @@ def index():
 @app.route('/process', methods=['POST'])
 @login_required
 def process_file():
-    """معالجة ملف Excel واستخراج جميع بيانات التأشيرة"""
+    """معالجة ملف Excel - استخراج البيانات المطلوبة فقط"""
     if 'file' not in request.files:
         return jsonify({'error': 'لم يتم رفع ملف'}), 400
 
@@ -400,19 +396,13 @@ def process_file():
         if not col_name:
             return jsonify({'error': 'لم يتم العثور على عمود "رقم الطلب"'}), 400
 
-        # إضافة أعمدة النتائج
-        df['حالة التأشيرة'] = ''
-        df['رقم المستند'] = ''
-        df['تاريخ الإصدار'] = ''
-        df['نوع التأشيرة'] = ''
-        df['اسم الشخص'] = ''
-        df['الاسم بالإنجليزي'] = ''
+        # إضافة الأعمدة المطلوبة فقط
+        df['الاسم'] = ''
         df['رقم الجواز'] = ''
-        df['نوع الجواز'] = ''
-        df['عدد مرات الدخول'] = ''
-        df['الممثلة في'] = ''
-        df['تاريخ الطلب'] = ''
-        df['ملاحظات'] = ''
+        df['رقم الطلب'] = ''
+        df['نوع التأشيرة'] = ''
+        df['حالة التأشيرة'] = ''
+        df['تاريخ الإصدار'] = ''
 
         total = len(df)
         success_count = 0
@@ -421,21 +411,16 @@ def process_file():
         for index, row in df.iterrows():
             app_no = str(row[col_name]).strip()
             
-            # استخراج جميع البيانات
+            # استخراج البيانات
             visa_data = extract_visa_data(app_no)
             
-            df.at[index, 'حالة التأشيرة'] = visa_data['status']
-            df.at[index, 'رقم المستند'] = visa_data['document_number']
-            df.at[index, 'تاريخ الإصدار'] = visa_data['issue_date']
-            df.at[index, 'نوع التأشيرة'] = visa_data['visa_type']
-            df.at[index, 'اسم الشخص'] = visa_data['applicant_name']
-            df.at[index, 'الاسم بالإنجليزي'] = visa_data['applicant_name_en']
+            # حفظ البيانات المطلوبة فقط
+            df.at[index, 'الاسم'] = visa_data['applicant_name']
             df.at[index, 'رقم الجواز'] = visa_data['passport_number']
-            df.at[index, 'نوع الجواز'] = visa_data['passport_type']
-            df.at[index, 'عدد مرات الدخول'] = visa_data['entry_count']
-            df.at[index, 'الممثلة في'] = visa_data['representation']
-            df.at[index, 'تاريخ الطلب'] = visa_data['request_date']
-            df.at[index, 'ملاحظات'] = visa_data['error']
+            df.at[index, 'رقم الطلب'] = app_no
+            df.at[index, 'نوع التأشيرة'] = visa_data['visa_type']
+            df.at[index, 'حالة التأشيرة'] = visa_data['status']
+            df.at[index, 'تاريخ الإصدار'] = visa_data['issue_date']
 
             if visa_data['status'] == 'مؤشر':
                 success_count += 1
