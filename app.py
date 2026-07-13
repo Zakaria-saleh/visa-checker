@@ -3,6 +3,7 @@ from flask_cors import CORS
 from functools import wraps
 import pandas as pd
 import requests
+from bs4 import BeautifulSoup
 import re
 import time
 import os
@@ -52,7 +53,7 @@ def logout():
     session.clear()
     return redirect(url_for('login'))
 
-# ===== الدالة الجذرية والمضمونة 100% =====
+# ===== الدالة المحصّنة والمضمونة 100% =====
 def extract_visa_data(app_number):
     url = BASE_URL.format(app_number)
     result = {
@@ -65,15 +66,37 @@ def extract_visa_data(app_number):
     }
     
     try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-        response = requests.get(url, headers=headers, timeout=20)
+        # هيدر متصفح حقيقي لتجنب الحظر
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'ar-SA,ar;q=0.9,en;q=0.8',
+            'Connection': 'keep-alive',
+        }
+        response = requests.get(url, headers=headers, timeout=30)
+        
+        # 🔥 ضمان قراءة النصوص العربية بشكل صحيح 100% 🔥
+        response.encoding = 'utf-8'
         
         if response.status_code == 200:
             html_text = response.text
             
-            # 🔥 الفحص الجذري المضمون 100% 🔥
-            # هذا الوسم الحرفي يوجد فقط في التأشيرات المؤشرة، ولا يوجد أبداً في غير المؤشرة
-            if '<label class="control-label">رقم المستند</label>' in html_text:
+            # 🔥 الفحص المزدوج المضمون 🔥
+            has_doc_label = False
+            
+            # الطريقة 1: BeautifulSoup (تتجاهل المسافات وتنسيق HTML)
+            soup = BeautifulSoup(html_text, 'html.parser')
+            for label in soup.find_all('label'):
+                if 'رقم المستند' in label.get_text(strip=True):
+                    has_doc_label = True
+                    break
+            
+            # الطريقة 2: Regex (كشبكة أمان في حال تعذر الـ Parsing)
+            if not has_doc_label:
+                if re.search(r'<label[^>]*>.*?رقم المستند.*?</label>', html_text, re.IGNORECASE | re.DOTALL):
+                    has_doc_label = True
+
+            if has_doc_label:
                 result['status'] = 'مؤشر'
                 
                 # استخراج التاريخ
@@ -96,8 +119,8 @@ def extract_visa_data(app_number):
                 if passport_match:
                     result['passport_number'] = passport_match.group(1).strip()
             else:
-                # غير مؤشر: نحاول استخراج الاسم ورقم الجواز فقط لملء الجدول بشكل جميل
                 result['status'] = 'غير مؤشر'
+                # نحاول استخراج الاسم ورقم الجواز حتى لو كان غير مؤشر لملء الجدول
                 name_match = re.search(r'الاسم\s*</label>.*?<div[^>]*>(.*?)</div>', html_text, re.DOTALL)
                 if name_match:
                     result['applicant_name'] = re.sub(r'<[^>]+>', '', name_match.group(1)).strip()
@@ -107,7 +130,7 @@ def extract_visa_data(app_number):
                     
             return result
         else:
-            result['error'] = f'خطأ ({response.status_code})'
+            result['error'] = f'فشل الاتصال ({response.status_code})'
             return result
     except Exception as e:
         result['error'] = str(e)
@@ -170,7 +193,9 @@ def process_file():
                 success_count += 1
             else:
                 error_count += 1
-            time.sleep(0.5)
+            
+            # 🔥 زيادة وقت الانتظار لتجنب حظر الموقع لكثرة الطلبات 🔥
+            time.sleep(2.0)
 
         filename = f"results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
         output = io.BytesIO()
@@ -232,7 +257,7 @@ def process_medical_file():
             res = check_medical_certificate(str(row[app_col]).strip(), str(row[pass_col]).strip())
             df.at[index, 'حالة الشهادة الصحية'] = res['status']
             if res['has_certificate']: success_count += 1
-            time.sleep(0.5)
+            time.sleep(2.0) # حماية من الحظر
 
         filename = f"medical_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
         output = io.BytesIO()
