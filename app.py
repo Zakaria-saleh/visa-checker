@@ -64,7 +64,7 @@ def logout():
     return redirect(url_for('login'))
 
 
-# ===== دالة استخراج بيانات التأشيرة (القاعدة الدقيقة 100%) =====
+# ===== دالة استخراج بيانات التأشيرة (المنطق النهائي المضمون) =====
 def extract_visa_data(app_number):
     url = BASE_URL.format(app_number)
     
@@ -87,60 +87,47 @@ def extract_visa_data(app_number):
 
         if response.status_code == 200:
             html_text = response.text
+            soup = BeautifulSoup(html_text, 'html.parser')
             
-            # 🔍 القاعدة الدقيقة 100%:
-            # 1. البحث عن "رقم المستند" كـ Label متبوعاً بـ Div يحتوي على أرقام فعلياً
-            # 2. أو البحث عن "تاريخ الإصدار" أو "تاريخ التأشيرة"
+            # 🔍 القاعدة الذهبية: البحث عن وسم label الفعلي، وليس النص في JavaScript
+            has_doc_label = False
+            for label in soup.find_all('label'):
+                if 'رقم المستند' in label.get_text(strip=True):
+                    has_doc_label = True
+                    break
             
-            is_issued = False
-            document_number = ''
-            issue_date = ''
-            
-            # فحص رقم المستند بدقة (يتجاهل وجود الكلمة داخل أكواد JS)
-            doc_match = re.search(r'رقم المستند\s*</label>.*?<div[^>]*>\s*(\d{7,12})\s*</div>', html_text, re.IGNORECASE | re.DOTALL)
-            if doc_match:
-                is_issued = True
-                document_number = doc_match.group(1).strip()
-            
-            # فحص تاريخ الإصدار أو تاريخ التأشيرة بدقة
-            date_match = re.search(r'(?:تاريخ الإصدار|تاريخ التأشيرة)\s*</label>.*?<div[^>]*>\s*(\d{2}[/\-]\d{2}[/\-]\d{4})\s*</div>', html_text, re.IGNORECASE | re.DOTALL)
-            if date_match:
-                is_issued = True
-                issue_date = date_match.group(1).strip()
-            
-            # إذا لم نجد تاريخ الإصدار، نبحث عن تاريخ الطلب للعرض فقط (لكن لا يغير الحالة إلى مؤشر)
-            if not issue_date:
-                req_date_match = re.search(r'تاريخ الطلب\s*</label>.*?<div[^>]*>\s*(\d{2}[/\-]\d{2}[/\-]\d{4})\s*</div>', html_text, re.IGNORECASE | re.DOTALL)
-                if req_date_match:
-                    issue_date = req_date_match.group(1).strip()
-
-            if is_issued:
+            if has_doc_label:
                 result['status'] = 'مؤشر'
-                result['issue_date'] = issue_date
+                
+                # استخراج التاريخ (الطلب أو الإصدار)
+                date_match = re.search(r'تاريخ (?:الطلب|الإصدار)[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4}|\d{4}[/\-]\d{2}[/\-]\d{2})', html_text)
+                if date_match:
+                    result['issue_date'] = date_match.group(1).strip()
                 
                 # استخراج نوع التأشيرة
-                type_match = re.search(r'نوع التأشيرة\s*</label>.*?<div[^>]*>\s*([^\n<]+?)\s*</div>', html_text, re.IGNORECASE | re.DOTALL)
+                type_match = re.search(r'نوع التأشيرة</label>.*?<div[^>]*>\s*([^\n<]+?)\s*</div>', html_text, re.DOTALL)
                 if type_match:
                     result['visa_type'] = type_match.group(1).strip()
                 
                 # استخراج الاسم
-                name_match = re.search(r'الاسم\s*</label>.*?<div[^>]*>\s*([^\n<]+?)\s*</div>', html_text, re.IGNORECASE | re.DOTALL)
+                name_match = re.search(r'الاسم</label>.*?<div[^>]*>\s*([^\n<]+?)\s*</div>', html_text, re.DOTALL)
                 if name_match:
                     result['applicant_name'] = name_match.group(1).strip()
-                
+                    
                 # استخراج رقم الجواز
-                passport_match = re.search(r'رقم الجواز\s*</label>.*?<div[^>]*>\s*(\d{7,12})\s*</div>', html_text, re.IGNORECASE | re.DOTALL)
+                passport_match = re.search(r'رقم الجواز</label>.*?<div[^>]*>\s*(\d{7,12})\s*</div>', html_text, re.DOTALL)
                 if passport_match:
                     result['passport_number'] = passport_match.group(1).strip()
                     
             else:
+                # غير مؤشر: نحاول استخراج الاسم ورقم الجواز فقط لملء الجدول
                 result['status'] = 'غير مؤشر'
-                # حتى لو غير مؤشر، نحاول استخراج الاسم ورقم الجواز للعرض في الجدول
-                name_match = re.search(r'الاسم\s*</label>.*?<div[^>]*>\s*([^\n<]+?)\s*</div>', html_text, re.IGNORECASE | re.DOTALL)
+                
+                name_match = re.search(r'الاسم</label>.*?<div[^>]*>\s*([^\n<]+?)\s*</div>', html_text, re.DOTALL)
                 if name_match:
                     result['applicant_name'] = name_match.group(1).strip()
-                
-                passport_match = re.search(r'رقم الجواز\s*</label>.*?<div[^>]*>\s*(\d{7,12})\s*</div>', html_text, re.IGNORECASE | re.DOTALL)
+                    
+                passport_match = re.search(r'رقم الجواز</label>.*?<div[^>]*>\s*(\d{7,12})\s*</div>', html_text, re.DOTALL)
                 if passport_match:
                     result['passport_number'] = passport_match.group(1).strip()
                     
@@ -162,28 +149,18 @@ def check_medical_certificate(app_number, passport_number):
             'Content-Type': 'application/x-www-form-urlencoded',
             'Referer': MEDICAL_URL
         }
-        
-        data = {
-            'ApplicationNo': app_number,
-            'PassportNo': passport_number,
-            'CaptchaCode': ''
-        }
-        
+        data = {'ApplicationNo': app_number, 'PassportNo': passport_number, 'CaptchaCode': ''}
         response = requests.post(MEDICAL_URL, data=data, headers=headers, timeout=15)
         
         if response.status_code == 200:
             html_text = response.text
             has_certificate = 'تم إصدار' in html_text or 'Issued' in html_text or 'موجود' in html_text
-            
             return {
                 'has_certificate': has_certificate,
                 'status': "تم الإصدار" if has_certificate else "لم يتم الإصدار",
-                'details': {},
-                'message': ''
+                'details': {}, 'message': ''
             }
-        else:
-            return {'has_certificate': False, 'status': f'خطأ ({response.status_code})', 'details': {}, 'message': ''}
-            
+        return {'has_certificate': False, 'status': f'خطأ ({response.status_code})', 'details': {}, 'message': ''}
     except Exception as e:
         return {'has_certificate': False, 'status': 'خطأ', 'details': {}, 'message': f'خطأ: {str(e)[:50]}'}
 
@@ -210,7 +187,7 @@ def process_file():
         return jsonify({'error': 'الرجاء رفع ملف Excel فقط'}), 400
 
     try:
-        # قراءة الملف الأصلي كما هو
+        # قراءة الملف الأصلي كما هو تماماً
         df = pd.read_excel(file)
 
         # البحث عن عمود رقم الطلب
@@ -223,7 +200,7 @@ def process_file():
         if not col_name:
             return jsonify({'error': 'لم يتم العثور على عمود "رقم الطلب"'}), 400
 
-        # إضافة الأعمدة الجديدة إلى الملف الأصلي (بدون حذف أي بيانات موجودة)
+        # إضافة الأعمدة الجديدة المطلوبة فقط
         df['الاسم'] = ''
         df['رقم الجواز'] = ''
         df['نوع التأشيرة'] = ''
@@ -236,11 +213,9 @@ def process_file():
 
         for index, row in df.iterrows():
             app_no = str(row[col_name]).strip()
-            
-            # استخراج البيانات
             visa_data = extract_visa_data(app_no)
             
-            # تعبئة الأعمدة الجديدة في الصف الحالي
+            # تعبئة البيانات في الأعمدة الجديدة
             df.at[index, 'الاسم'] = visa_data['applicant_name']
             df.at[index, 'رقم الجواز'] = visa_data['passport_number']
             df.at[index, 'نوع التأشيرة'] = visa_data['visa_type']
@@ -252,14 +227,14 @@ def process_file():
             else:
                 error_count += 1
 
-            time.sleep(0.5)
+            time.sleep(0.5) # لتجنب الحظر من الخادم
 
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         output_filename = f'results_{timestamp}.xlsx'
 
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            # حفظ الملف مع جميع الأعمدة الأصلية + الأعمدة الجديدة المضافة
+            # حفظ الملف مع الأعمدة الأصلية + الأعمدة الجديدة المضافة
             df.to_excel(writer, index=False, sheet_name='النتائج')
         output.seek(0)
 
@@ -268,7 +243,7 @@ def process_file():
         with open(output_path, 'wb') as f:
             f.write(output.getvalue())
 
-        gc.collect()
+        gc.collect() # تنظيف الذاكرة
 
         return jsonify({
             'success': True,
@@ -335,7 +310,6 @@ def process_medical_file():
 
     try:
         df = pd.read_excel(file)
-
         app_col = next((col for col in df.columns if 'رقم الطلب' in str(col) or 'application' in str(col).lower()), None)
         passport_col = next((col for col in df.columns if 'رقم الجواز' in str(col) or 'passport' in str(col).lower()), None)
 
@@ -344,7 +318,6 @@ def process_medical_file():
 
         df['حالة الشهادة الصحية'] = ''
         df['تفاصيل'] = ''
-
         total = len(df)
         success_count = 0
 
