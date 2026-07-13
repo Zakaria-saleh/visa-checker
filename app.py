@@ -3,7 +3,6 @@ from flask_cors import CORS
 from functools import wraps
 import pandas as pd
 import requests
-from bs4 import BeautifulSoup
 import re
 import time
 import os
@@ -17,7 +16,6 @@ import gc
 app = Flask(__name__, template_folder='visa_system/templates', static_folder='visa_system/static')
 CORS(app)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
-
 app.secret_key = 'visa-system-secret-key-2026-xyz'
 
 VALID_USERNAME = 'زكريا السعدي'
@@ -25,7 +23,6 @@ VALID_PASSWORD_HASH = hashlib.sha256('773983986'.encode()).hexdigest()
 
 BASE_URL = 'https://visa.mofa.gov.sa/Enjaz/PrintApplication?ApplicationNo={}'
 MEDICAL_URL = 'https://visa.mofa.gov.sa/visaperson/checkmedicalresult'
-
 
 # ===== نظام المصادقة =====
 def login_required(f):
@@ -36,38 +33,28 @@ def login_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
-
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '').strip()
-        
-        password_hash = hashlib.sha256(password.encode()).hexdigest()
-        
-        if username == VALID_USERNAME and password_hash == VALID_PASSWORD_HASH:
+        if username == VALID_USERNAME and hashlib.sha256(password.encode()).hexdigest() == VALID_PASSWORD_HASH:
             session['logged_in'] = True
             session['username'] = username
             return redirect(url_for('index'))
-        else:
-            return render_template('login.html', error='اسم المستخدم أو كلمة السر غير صحيحة')
-    
+        return render_template('login.html', error='اسم المستخدم أو كلمة السر غير صحيحة')
     if 'logged_in' in session:
         return redirect(url_for('index'))
-    
     return render_template('login.html', error=None)
-
 
 @app.route('/logout')
 def logout():
     session.clear()
     return redirect(url_for('login'))
 
-
-# ===== دالة استخراج بيانات التأشيرة (المنطق النهائي المضمون) =====
+# ===== الدالة الجذرية والمضمونة 100% =====
 def extract_visa_data(app_number):
     url = BASE_URL.format(app_number)
-    
     result = {
         'status': 'غير مؤشر',
         'applicant_name': '',
@@ -78,56 +65,43 @@ def extract_visa_data(app_number):
     }
     
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'ar-SA,ar;q=0.9,en;q=0.8'
-        }
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         response = requests.get(url, headers=headers, timeout=20)
-
+        
         if response.status_code == 200:
             html_text = response.text
-            soup = BeautifulSoup(html_text, 'html.parser')
             
-            # 🔍 القاعدة الذهبية: البحث عن وسم label الفعلي، وليس النص في JavaScript
-            has_doc_label = False
-            for label in soup.find_all('label'):
-                if 'رقم المستند' in label.get_text(strip=True):
-                    has_doc_label = True
-                    break
-            
-            if has_doc_label:
+            # 🔥 الفحص الجذري المضمون 100% 🔥
+            # هذا الوسم الحرفي يوجد فقط في التأشيرات المؤشرة، ولا يوجد أبداً في غير المؤشرة
+            if '<label class="control-label">رقم المستند</label>' in html_text:
                 result['status'] = 'مؤشر'
                 
-                # استخراج التاريخ (الطلب أو الإصدار)
-                date_match = re.search(r'تاريخ (?:الطلب|الإصدار)[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4}|\d{4}[/\-]\d{2}[/\-]\d{2})', html_text)
+                # استخراج التاريخ
+                date_match = re.search(r'تاريخ (?:الطلب|الإصدار)[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})', html_text)
                 if date_match:
                     result['issue_date'] = date_match.group(1).strip()
                 
                 # استخراج نوع التأشيرة
-                type_match = re.search(r'نوع التأشيرة</label>.*?<div[^>]*>\s*([^\n<]+?)\s*</div>', html_text, re.DOTALL)
+                type_match = re.search(r'نوع التأشيرة\s*</label>.*?<div[^>]*>(.*?)</div>', html_text, re.DOTALL)
                 if type_match:
-                    result['visa_type'] = type_match.group(1).strip()
+                    result['visa_type'] = re.sub(r'<[^>]+>', '', type_match.group(1)).strip()
                 
                 # استخراج الاسم
-                name_match = re.search(r'الاسم</label>.*?<div[^>]*>\s*([^\n<]+?)\s*</div>', html_text, re.DOTALL)
+                name_match = re.search(r'الاسم\s*</label>.*?<div[^>]*>(.*?)</div>', html_text, re.DOTALL)
                 if name_match:
-                    result['applicant_name'] = name_match.group(1).strip()
-                    
+                    result['applicant_name'] = re.sub(r'<[^>]+>', '', name_match.group(1)).strip()
+                
                 # استخراج رقم الجواز
-                passport_match = re.search(r'رقم الجواز</label>.*?<div[^>]*>\s*(\d{7,12})\s*</div>', html_text, re.DOTALL)
+                passport_match = re.search(r'رقم الجواز\s*</label>.*?<div[^>]*>(\d+)</div>', html_text, re.DOTALL)
                 if passport_match:
                     result['passport_number'] = passport_match.group(1).strip()
-                    
             else:
-                # غير مؤشر: نحاول استخراج الاسم ورقم الجواز فقط لملء الجدول
+                # غير مؤشر: نحاول استخراج الاسم ورقم الجواز فقط لملء الجدول بشكل جميل
                 result['status'] = 'غير مؤشر'
-                
-                name_match = re.search(r'الاسم</label>.*?<div[^>]*>\s*([^\n<]+?)\s*</div>', html_text, re.DOTALL)
+                name_match = re.search(r'الاسم\s*</label>.*?<div[^>]*>(.*?)</div>', html_text, re.DOTALL)
                 if name_match:
-                    result['applicant_name'] = name_match.group(1).strip()
-                    
-                passport_match = re.search(r'رقم الجواز</label>.*?<div[^>]*>\s*(\d{7,12})\s*</div>', html_text, re.DOTALL)
+                    result['applicant_name'] = re.sub(r'<[^>]+>', '', name_match.group(1)).strip()
+                passport_match = re.search(r'رقم الجواز\s*</label>.*?<div[^>]*>(\d+)</div>', html_text, re.DOTALL)
                 if passport_match:
                     result['passport_number'] = passport_match.group(1).strip()
                     
@@ -135,224 +109,145 @@ def extract_visa_data(app_number):
         else:
             result['error'] = f'خطأ ({response.status_code})'
             return result
-
     except Exception as e:
-        result['error'] = f'خطأ: {str(e)[:100]}'
+        result['error'] = str(e)
         return result
 
-
-# ===== دالة التحقق من الشهادة الصحية =====
+# ===== دالة الشهادة الصحية =====
 def check_medical_certificate(app_number, passport_number):
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Referer': MEDICAL_URL
-        }
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', 'Referer': MEDICAL_URL}
         data = {'ApplicationNo': app_number, 'PassportNo': passport_number, 'CaptchaCode': ''}
         response = requests.post(MEDICAL_URL, data=data, headers=headers, timeout=15)
-        
         if response.status_code == 200:
-            html_text = response.text
-            has_certificate = 'تم إصدار' in html_text or 'Issued' in html_text or 'موجود' in html_text
-            return {
-                'has_certificate': has_certificate,
-                'status': "تم الإصدار" if has_certificate else "لم يتم الإصدار",
-                'details': {}, 'message': ''
-            }
+            html = response.text
+            is_issued = 'تم إصدار' in html or 'Issued' in html or 'موجود' in html
+            return {'has_certificate': is_issued, 'status': "تم الإصدار" if is_issued else "لم يتم الإصدار", 'details': {}, 'message': ''}
         return {'has_certificate': False, 'status': f'خطأ ({response.status_code})', 'details': {}, 'message': ''}
     except Exception as e:
-        return {'has_certificate': False, 'status': 'خطأ', 'details': {}, 'message': f'خطأ: {str(e)[:50]}'}
+        return {'has_certificate': False, 'status': 'خطأ', 'details': {}, 'message': str(e)[:50]}
 
-
-# ===== المسارات الرئيسية =====
+# ===== المسارات =====
 @app.route('/')
 @login_required
 def index():
     return render_template('index.html', username=session.get('username', ''))
 
-
 @app.route('/process', methods=['POST'])
 @login_required
 def process_file():
-    """معالجة ملف Excel - الحفاظ على الأعمدة الأصلية وإضافة الأعمدة الجديدة فقط"""
     if 'file' not in request.files:
         return jsonify({'error': 'لم يتم رفع ملف'}), 400
-
     file = request.files['file']
-    if file.filename == '':
-        return jsonify({'error': 'لم يتم اختيار ملف'}), 400
-
-    if not file.filename.endswith(('.xlsx', '.xls')):
+    if file.filename == '' or not file.filename.endswith(('.xlsx', '.xls')):
         return jsonify({'error': 'الرجاء رفع ملف Excel فقط'}), 400
 
     try:
-        # قراءة الملف الأصلي كما هو تماماً
         df = pd.read_excel(file)
-
-        # البحث عن عمود رقم الطلب
-        col_name = None
-        for col in df.columns:
-            if 'رقم الطلب' in str(col) or 'application' in str(col).lower() or 'request' in str(col).lower():
-                col_name = col
-                break
-
+        col_name = next((col for col in df.columns if 'رقم الطلب' in str(col) or 'application' in str(col).lower()), None)
         if not col_name:
             return jsonify({'error': 'لم يتم العثور على عمود "رقم الطلب"'}), 400
 
-        # إضافة الأعمدة الجديدة المطلوبة فقط
-        df['الاسم'] = ''
-        df['رقم الجواز'] = ''
-        df['نوع التأشيرة'] = ''
-        df['حالة التأشيرة'] = ''
-        df['تاريخ الإصدار'] = ''
+        # إضافة الأعمدة الجديدة فقط دون المساس بالأعمدة الأصلية
+        for col in ['الاسم', 'رقم الجواز', 'نوع التأشيرة', 'حالة التأشيرة', 'تاريخ الإصدار']:
+            if col not in df.columns:
+                df[col] = ''
 
-        total = len(df)
         success_count = 0
         error_count = 0
 
         for index, row in df.iterrows():
             app_no = str(row[col_name]).strip()
-            visa_data = extract_visa_data(app_no)
+            data = extract_visa_data(app_no)
             
-            # تعبئة البيانات في الأعمدة الجديدة
-            df.at[index, 'الاسم'] = visa_data['applicant_name']
-            df.at[index, 'رقم الجواز'] = visa_data['passport_number']
-            df.at[index, 'نوع التأشيرة'] = visa_data['visa_type']
-            df.at[index, 'حالة التأشيرة'] = visa_data['status']
-            df.at[index, 'تاريخ الإصدار'] = visa_data['issue_date']
+            df.at[index, 'الاسم'] = data['applicant_name']
+            df.at[index, 'رقم الجواز'] = data['passport_number']
+            df.at[index, 'نوع التأشيرة'] = data['visa_type']
+            df.at[index, 'حالة التأشيرة'] = data['status']
+            df.at[index, 'تاريخ الإصدار'] = data['issue_date']
 
-            if visa_data['status'] == 'مؤشر':
+            if data['status'] == 'مؤشر':
                 success_count += 1
             else:
                 error_count += 1
+            time.sleep(0.5)
 
-            time.sleep(0.5) # لتجنب الحظر من الخادم
-
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        output_filename = f'results_{timestamp}.xlsx'
-
+        filename = f"results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            # حفظ الملف مع الأعمدة الأصلية + الأعمدة الجديدة المضافة
             df.to_excel(writer, index=False, sheet_name='النتائج')
         output.seek(0)
-
-        tmpdir = tempfile.gettempdir()
-        output_path = os.path.join(tmpdir, output_filename)
-        with open(output_path, 'wb') as f:
+        
+        path = os.path.join(tempfile.gettempdir(), filename)
+        with open(path, 'wb') as f:
             f.write(output.getvalue())
+        gc.collect()
 
-        gc.collect() # تنظيف الذاكرة
-
-        return jsonify({
-            'success': True,
-            'total': total,
-            'success_count': success_count,
-            'error_count': error_count,
-            'filename': output_filename
-        }), 200
-
+        return jsonify({'success': True, 'total': len(df), 'success_count': success_count, 'error_count': error_count, 'filename': filename}), 200
     except Exception as e:
-        return jsonify({'error': f'حدث خطأ: {str(e)}'}), 500
-
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/download/<filename>')
 @login_required
 def download_file(filename):
-    try:
-        tmpdir = tempfile.gettempdir()
-        path = os.path.join(tmpdir, filename)
+    path = os.path.join(tempfile.gettempdir(), filename)
+    if os.path.exists(path):
         return send_file(path, as_attachment=True)
-    except Exception:
-        return jsonify({'error': 'الملف غير موجود'}), 404
-
+    return jsonify({'error': 'الملف غير موجود'}), 404
 
 @app.route('/stats')
 @login_required
 def get_stats():
-    return jsonify({
-        'status': 'System is running',
-        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'user': session.get('username', '')
-    })
-
+    return jsonify({'status': 'running', 'user': session.get('username', '')})
 
 @app.route('/check-medical', methods=['POST'])
 @login_required
 def check_medical():
-    try:
-        data = request.get_json()
-        if not data:
-            return jsonify({'error': 'لم يتم استلام البيانات'}), 400
-        
-        app_number = data.get('application_number', '').strip()
-        passport_number = data.get('passport_number', '').strip()
-        
-        if not app_number or not passport_number:
-            return jsonify({'error': 'رقم الطلب ورقم الجواز مطلوبان'}), 400
-        
-        result = check_medical_certificate(app_number, passport_number)
-        return jsonify({'success': True, 'result': result}), 200
-    except Exception as e:
-        return jsonify({'error': f'حدث خطأ: {str(e)}'}), 500
-
+    data = request.get_json() or {}
+    app_no = data.get('application_number', '').strip()
+    pass_no = data.get('passport_number', '').strip()
+    if not app_no or not pass_no:
+        return jsonify({'error': 'البيانات ناقصة'}), 400
+    return jsonify({'success': True, 'result': check_medical_certificate(app_no, pass_no)}), 200
 
 @app.route('/process-medical', methods=['POST'])
 @login_required
 def process_medical_file():
     if 'file' not in request.files:
         return jsonify({'error': 'لم يتم رفع ملف'}), 400
-
     file = request.files['file']
     if file.filename == '' or not file.filename.endswith(('.xlsx', '.xls')):
-        return jsonify({'error': 'الرجاء رفع ملف Excel صحيح'}), 400
+        return jsonify({'error': 'الرجاء رفع ملف Excel'}), 400
 
     try:
         df = pd.read_excel(file)
-        app_col = next((col for col in df.columns if 'رقم الطلب' in str(col) or 'application' in str(col).lower()), None)
-        passport_col = next((col for col in df.columns if 'رقم الجواز' in str(col) or 'passport' in str(col).lower()), None)
-
-        if not app_col or not passport_col:
-            return jsonify({'error': 'يجب وجود أعمدة "رقم الطلب" و "رقم الجواز"'}), 400
+        app_col = next((col for col in df.columns if 'رقم الطلب' in str(col)), None)
+        pass_col = next((col for col in df.columns if 'رقم الجواز' in str(col)), None)
+        if not app_col or not pass_col:
+            return jsonify({'error': 'يجب وجود أعمدة رقم الطلب ورقم الجواز'}), 400
 
         df['حالة الشهادة الصحية'] = ''
-        df['تفاصيل'] = ''
-        total = len(df)
         success_count = 0
-
         for index, row in df.iterrows():
-            result = check_medical_certificate(str(row[app_col]).strip(), str(row[passport_col]).strip())
-            df.at[index, 'حالة الشهادة الصحية'] = result['status']
-            if result['has_certificate']:
-                success_count += 1
+            res = check_medical_certificate(str(row[app_col]).strip(), str(row[pass_col]).strip())
+            df.at[index, 'حالة الشهادة الصحية'] = res['status']
+            if res['has_certificate']: success_count += 1
             time.sleep(0.5)
 
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        output_filename = f'medical_results_{timestamp}.xlsx'
-
+        filename = f"medical_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df.to_excel(writer, index=False, sheet_name='النتائج')
         output.seek(0)
-
-        tmpdir = tempfile.gettempdir()
-        output_path = os.path.join(tmpdir, output_filename)
-        with open(output_path, 'wb') as f:
+        
+        path = os.path.join(tempfile.gettempdir(), filename)
+        with open(path, 'wb') as f:
             f.write(output.getvalue())
-
         gc.collect()
 
-        return jsonify({
-            'success': True, 'total': total, 'success_count': success_count,
-            'error_count': total - success_count, 'filename': output_filename
-        }), 200
-
+        return jsonify({'success': True, 'total': len(df), 'success_count': success_count, 'error_count': len(df)-success_count, 'filename': filename}), 200
     except Exception as e:
-        return jsonify({'error': f'حدث خطأ: {str(e)}'}), 500
-
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    debug_mode = os.environ.get('FLASK_DEBUG', 'False').lower() in ('1', 'true', 'yes')
-    app.run(debug=debug_mode, host='0.0.0.0', port=port)
+    app.run(debug=False, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
