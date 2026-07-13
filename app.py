@@ -64,12 +64,12 @@ def logout():
     return redirect(url_for('login'))
 
 
-# ===== دالة استخراج بيانات التأشيرة مع التحقق من عدد الباركودات =====
+# ===== دالة استخراج بيانات التأشيرة =====
 def extract_visa_data(app_number):
     """
-    القاعدة الجديدة:
-    - باركودين (يمين + يسار) = مؤشر ✅
-    - باركود واحد فقط = غير مؤشر ❌
+    القاعدة الدقيقة:
+    - إذا وُجد "رقم المستند" في الصفحة = مؤشر ✅
+    - إذا لم يوجد = غير مؤشر 
     """
     url = BASE_URL.format(app_number)
     
@@ -85,7 +85,6 @@ def extract_visa_data(app_number):
         'entry_count': '',
         'representation': '',
         'request_date': '',
-        'barcode_count': 0,
         'error': ''
     }
     
@@ -101,93 +100,43 @@ def extract_visa_data(app_number):
             html_text = response.text
             soup = BeautifulSoup(html_text, 'html.parser')
             
-            # ===== 1️ عدّ الباركودات =====
-            barcode_count = 0
-            barcode_images = []
+            # =====  القاعدة الأساسية: البحث عن "رقم المستند" =====
+            has_document_number = False
+            document_number = ''
             
-            # البحث عن جميع الصور التي قد تكون باركود
-            for img in soup.find_all('img'):
-                src = img.get('src', '').lower()
-                alt = img.get('alt', '').lower()
-                class_name = ' '.join(img.get('class', [])).lower()
-                id_name = img.get('id', '').lower()
-                
-                # مؤشرات الباركود
-                barcode_indicators = [
-                    'barcode', 'bar-code', 'bar_code',
-                    'bcs', 'bcimg', 'imgbarcode',
-                    'img-barcode', 'img_barcode',
-                    'printapplication', 'enjaz'
-                ]
-                
-                is_barcode = False
-                for indicator in barcode_indicators:
-                    if indicator in src or indicator in alt or indicator in class_name or indicator in id_name:
-                        is_barcode = True
-                        break
-                
-                # التحقق من حجم الصورة (الباركود عادة صغير وعريض)
-                width = img.get('width', '')
-                height = img.get('height', '')
-                
-                # إذا كانت الصورة عريضة (عرض > ارتفاع) فهي غالباً باركود
-                if is_barcode:
-                    barcode_count += 1
-                    barcode_images.append({
-                        'src': src,
-                        'alt': alt,
-                        'width': width,
-                        'height': height
-                    })
-                elif width and height:
-                    try:
-                        w = int(width)
-                        h = int(height)
-                        # باركود عادة عرضه أكبر من ارتفاعه بـ 3 مرات على الأقل
-                        if w > 100 and w > h * 2:
-                            barcode_count += 1
-                            barcode_images.append({
-                                'src': src,
-                                'alt': alt,
-                                'width': width,
-                                'height': height
-                            })
-                    except:
-                        pass
+            # الطريقة 1: البحث عن label يحتوي "رقم المستند"
+            for label in soup.find_all('label'):
+                label_text = label.get_text(strip=True)
+                if 'رقم المستند' in label_text or 'Document Number' in label_text:
+                    has_document_number = True
+                    break
             
-            # البحث عن SVG للباركود
-            for svg in soup.find_all('svg'):
-                svg_class = ' '.join(svg.get('class', [])).lower()
-                if 'barcode' in svg_class or 'bcs' in svg_class:
-                    barcode_count += 1
+            # الطريقة 2: البحث عن النص في HTML
+            if not has_document_number:
+                if 'رقم المستند' in html_text or 'Document Number' in html_text:
+                    has_document_number = True
             
-            result['barcode_count'] = barcode_count
+            # الطريقة 3: البحث عن رقم المستند (9-10 أرقام)
+            doc_patterns = [
+                r'رقم المستند[:\s]*(\d{7,12})',
+                r'Document Number[:\s]*(\d{7,12})',
+                r'Document No[:\s]*(\d{7,12})',
+                r'رقم المستند.*?(\d{7,12})'
+            ]
             
-            # ===== 2️⃣ القرار: هل مؤشرة أم لا؟ =====
-            # القاعدة: باركودين = مؤشر، باركود واحد = غير مؤشر
-            is_issued = barcode_count >= 2
+            for pattern in doc_patterns:
+                match = re.search(pattern, html_text, re.I | re.S)
+                if match:
+                    document_number = match.group(1).strip()
+                    has_document_number = True
+                    break
             
-            if is_issued:
+            # ===== 🎯 القرار النهائي =====
+            if has_document_number:
                 result['status'] = 'مؤشر'
-                
-                # استخراج رقم المستند (الأسود)
-                document_number = ''
-                doc_patterns = [
-                    r'رقم المستند[:\s]*(\d{7,12})',
-                    r'Document Number[:\s]*(\d{7,12})',
-                    r'Document No[:\s]*(\d{7,12})',
-                    r'رقم المستند.*?(\d{7,12})'
-                ]
-                
-                for pattern in doc_patterns:
-                    match = re.search(pattern, html_text, re.I | re.S)
-                    if match:
-                        document_number = match.group(1).strip()
-                        break
-                
                 result['document_number'] = document_number
                 
-                # استخراج تاريخ الإصدار/الطلب (الأصفر)
+                # استخراج تاريخ الإصدار/الطلب
                 issue_date = ''
                 date_patterns = [
                     r'تاريخ الطلب[:\s]*(\d{2}[/\-]\d{2}[/\-]\d{4})',
@@ -215,7 +164,7 @@ def extract_visa_data(app_number):
                 
                 result['issue_date'] = issue_date
                 
-                # استخراج نوع التأشيرة (الأحمر)
+                # استخراج نوع التأشيرة
                 visa_type = ''
                 type_patterns = [
                     r'نوع التأشيرة[:\s]*([^\n<]+?)(?:\s*(?:عدد|اسم|الممثلة|<))',
@@ -344,7 +293,7 @@ def extract_visa_data(app_number):
                 result['request_date'] = request_date
                 
             else:
-                # غير مؤشر - باركود واحد أو لا يوجد
+                # غير مؤشر - لا يوجد رقم مستند
                 result['status'] = 'غير مؤشر'
             
             return result
