@@ -1,4 +1,5 @@
 from flask import Flask, render_template, request, send_file, jsonify
+from flask_cors import CORS  # ← تم الإضافة
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
@@ -11,6 +12,7 @@ import tempfile
 
 # Keep app.py in project root but templates live in visa_system/templates
 app = Flask(__name__, template_folder='visa_system/templates', static_folder='visa_system/static')
+CORS(app)  # ← تم الإضافة - يسمح لجميع المصادر بالاتصال
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 
 BASE_URL = 'https://visa.mofa.gov.sa/Enjaz/PrintApplication?ApplicationNo={}'
