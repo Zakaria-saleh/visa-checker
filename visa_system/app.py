@@ -14,8 +14,8 @@ import hashlib
 import gc
 import logging
 
-# إعداد النظام
-logging.basicConfig(level=logging.INFO)
+# إعداد السجلات لتظهر في Console Render
+logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__, template_folder='visa_system/templates', static_folder='visa_system/static')
@@ -27,6 +27,15 @@ VALID_USERNAME = 'زكريا السعدي'
 VALID_PASSWORD_HASH = hashlib.sha256('773983986'.encode()).hexdigest()
 
 BASE_URL = 'https://visa.mofa.gov.sa/Enjaz/PrintApplication?ApplicationNo={}'
+
+# ===== هيدر متصفح حقيقي لتجنب الحظر =====
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+    'Accept-Language': 'ar-SA,ar;q=0.9,en;q=0.8',
+    'Connection': 'keep-alive',
+    'Upgrade-Insecure-Requests': '1',
+}
 
 def login_required(f):
     @wraps(f)
@@ -55,58 +64,51 @@ def logout():
     session.clear()
     return redirect(url_for('login'))
 
-# ===== الدالة الدقيقة جداً =====
+# ===== دالة الفحص الدقيقة مع إدارة الجلسة =====
 def check_visa_status(app_number):
     """
-    القاعدة:
-    1. التأكد أن الصفحة هي صفحة بيانات تأشيرة وليست خطأ أو تسجيل دخول (بالبحث عن 'تاريخ الطلب').
-    2. البحث عن وسم <label> يحتوي على 'رقم المستند'.
-       - إذا وُجد: فهي مؤشرة.
-       - إذا لم يُوجد: فهي غير مؤشرة.
+    1. ينشئ جلسة جديدة ويحمل الصفحة الرئيسية لأخذ الكوكيز.
+    2. يطلب صفحة الطباعة.
+    3. يتحقق إن كان الرد صفحة تسجيل دخول (حظر/آي بي).
+    4. يبحث عن <label>رقم المستند</label> بدقة.
     """
-    url = BASE_URL.format(app_number)
-    session_obj = requests.Session()
-    
+    req_session = requests.Session()
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'ar-SA,ar;q=0.9,en;q=0.8',
-        }
-        response = session_obj.get(url, headers=headers, timeout=30)
+        # خطوة 1: تحميل الصفحة الرئيسية لتأسيس الجلسة والكوكيز
+        req_session.get('https://visa.mofa.gov.sa/', headers=HEADERS, timeout=10, allow_redirects=True)
+        
+        # خطوة 2: طلب صفحة التأشيرة
+        response = req_session.get(BASE_URL.format(app_number), headers=HEADERS, timeout=15, allow_redirects=True)
         response.encoding = 'utf-8'
+        
+        html_text = response.text
+        
+        #  كشف صفحة تسجيل الدخول (دليل على حظر الآي بي أو فقدان الجلسة)
+        if 'UserName' in html_text and 'كلمة المرور' in html_text:
+            logger.warning(f"⚠️ الطلب {app_number}: تم التوجيه لصفحة تسجيل الدخول (آي بي محظور أو جلسة منتهية)")
+            return 'خطأ جلسة'
 
-        if response.status_code != 200:
-            return 'غير مؤشر'
-
-        soup = BeautifulSoup(response.text, 'html.parser')
-
-        # إزالة السكريبتات والستايلات لمنع الخداع
-        for tag in soup(['script', 'style', 'noscript', 'meta']):
+        # 🔍 البحث الدقيق عن وسم الرقم المستند
+        soup = BeautifulSoup(html_text, 'html.parser')
+        # إزالة السكريبتات لمنع التشويش
+        for tag in soup(['script', 'style', 'noscript']):
             tag.extract()
-
-        # التحقق 1: هل الصفحة تحتوي على "تاريخ الطلب"؟ (للتأكد أنها صفحة تأشيرة صحيحة)
-        date_label = soup.find('label', string=re.compile(r'تاريخ الطلب'))
-        if not date_label:
-            # إذا لم نجد تاريخ الطلب، فالصفحة خاطئة أو غير مكتملة
-            return 'غير مؤشر'
-
-        # التحقق 2: هل يوجد وسم label مكتوب فيه "رقم المستند"؟
-        # هذا وسم HTML لا يوجد إلا في التأشيرات المؤشرة
-        doc_label = soup.find('label', string=re.compile(r'رقم المستند'))
+            
+        # البحث عن label يحتوي النص
+        doc_label = soup.find('label', string=lambda t: t and 'رقم المستند' in t)
         
         if doc_label:
-            logger.info(f"✅ الطلب {app_number}: مؤشر (تم العثور على رقم المستند)")
+            logger.info(f"✅ الطلب {app_number}: مؤشر")
             return 'مؤشر'
         else:
-            logger.info(f"❌ الطلب {app_number}: غير مؤشر (لم يتم العثور على رقم المستند)")
+            logger.info(f" الطلب {app_number}: غير مؤشر")
             return 'غير مؤشر'
-
-    except Exception as e:
-        logger.error(f"خطأ في فحص {app_number}: {str(e)}")
-        return 'غير مؤشر'
+            
+    except requests.exceptions.RequestException as e:
+        logger.error(f"❌ خطأ اتصال في {app_number}: {e}")
+        return 'خطأ اتصال'
     finally:
-        session_obj.close()
+        req_session.close()
 
 @app.route('/')
 @login_required
@@ -118,82 +120,59 @@ def index():
 def process_file():
     if 'file' not in request.files:
         return jsonify({'error': 'لم يتم رفع ملف'}), 400
-
     file = request.files['file']
     if file.filename == '' or not file.filename.endswith(('.xlsx', '.xls')):
         return jsonify({'error': 'الرجاء رفع ملف Excel فقط'}), 400
 
     try:
-        # قراءة الملف الأصلي
         df = pd.read_excel(file)
-
-        # البحث عن عمود رقم الطلب
-        col_name = None
-        for col in df.columns:
-            if 'رقم الطلب' in str(col) or 'application' in str(col).lower():
-                col_name = col
-                break
-
+        col_name = next((c for c in df.columns if 'رقم الطلب' in str(c) or 'application' in str(c).lower()), None)
         if not col_name:
-            return jsonify({'error': 'لم يتم العثور على عمود "رقم الطلب"'}), 400
+            return jsonify({'error': 'عمود رقم الطلب غير موجود'}), 400
 
-        # إضافة عمود الحالة فقط
         if 'حالة التأشيرة' not in df.columns:
             df['حالة التأشيرة'] = ''
 
         total = len(df)
-        success_count = 0
-        error_count = 0
+        success = error = 0
 
-        for index, row in df.iterrows():
+        for idx, row in df.iterrows():
             app_no = str(row[col_name]).strip()
+            logger.info(f"🔄 فحص {idx+1}/{total}: {app_no}")
+            
             status = check_visa_status(app_no)
-
-            df.at[index, 'حالة التأشيرة'] = status
-
-            if status == 'مؤشر':
-                success_count += 1
-            else:
-                error_count += 1
-
-            # تأخير لتجنب الحظر
-            time.sleep(2.5)
+            df.at[idx, 'حالة التأشيرة'] = status
+            
+            if status == 'مؤشر': success += 1
+            else: error += 1
+            
+            time.sleep(2.0) # تأخير آمن
 
         filename = f"results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False, sheet_name='النتائج')
-        output.seek(0)
-
+        out = io.BytesIO()
+        with pd.ExcelWriter(out, engine='openpyxl') as w:
+            df.to_excel(w, index=False, sheet_name='النتائج')
+        out.seek(0)
+        
         path = os.path.join(tempfile.gettempdir(), filename)
-        with open(path, 'wb') as f:
-            f.write(output.getvalue())
+        with open(path, 'wb') as f: f.write(out.getvalue())
         gc.collect()
 
-        return jsonify({
-            'success': True,
-            'total': total,
-            'success_count': success_count,
-            'error_count': error_count,
-            'filename': filename
-        }), 200
-
+        return jsonify({'success': True, 'total': total, 'success_count': success, 'error_count': error, 'filename': filename}), 200
     except Exception as e:
-        logger.error(f"خطأ في المعالجة: {str(e)}")
+        logger.error(f"خطأ فادح: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/download/<filename>')
 @login_required
 def download_file(filename):
     path = os.path.join(tempfile.gettempdir(), filename)
-    if os.path.exists(path):
-        return send_file(path, as_attachment=True)
-    return jsonify({'error': 'الملف غير موجود'}), 404
+    return send_file(path, as_attachment=True) if os.path.exists(path) else (jsonify({'error': 'غير موجود'}), 404)
 
 @app.route('/stats')
 @login_required
 def get_stats():
-    return jsonify({'status': 'running', 'user': session.get('username', '')})
+    return jsonify({'status': 'ready', 'user': session.get('username', '')})
 
 if __name__ == '__main__':
-    app.run(debug=False, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
