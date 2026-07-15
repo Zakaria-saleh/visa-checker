@@ -14,11 +14,10 @@ import hashlib
 import gc
 import logging
 
-# إعداد نظام التسجيل لمتابعة الأخطاء إن وجدت
+# إعداد النظام
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ===== إعداد التطبيق =====
 app = Flask(__name__, template_folder='visa_system/templates', static_folder='visa_system/static')
 CORS(app)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
@@ -29,7 +28,6 @@ VALID_PASSWORD_HASH = hashlib.sha256('773983986'.encode()).hexdigest()
 
 BASE_URL = 'https://visa.mofa.gov.sa/Enjaz/PrintApplication?ApplicationNo={}'
 
-# ===== نظام المصادقة =====
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -57,57 +55,59 @@ def logout():
     session.clear()
     return redirect(url_for('login'))
 
-# ===== الدالة الجذرية المبسطة =====
+# ===== الدالة الدقيقة جداً =====
 def check_visa_status(app_number):
     """
-    القاعدة الوحيدة والدقيقة:
-    - إذا احتوى الرد على "رقم المستند" متبوعاً برقم (7-12 خانات) = مؤشر
-    - غير ذلك = غير مؤشر
+    القاعدة:
+    1. التأكد أن الصفحة هي صفحة بيانات تأشيرة وليست خطأ أو تسجيل دخول (بالبحث عن 'تاريخ الطلب').
+    2. البحث عن وسم <label> يحتوي على 'رقم المستند'.
+       - إذا وُجد: فهي مؤشرة.
+       - إذا لم يُوجد: فهي غير مؤشرة.
     """
     url = BASE_URL.format(app_number)
-    # استخدام Session للحفاظ على الكوكيز وتجنب إعادة التوجيه لصفحة الدخول
-    session = requests.Session()
+    session_obj = requests.Session()
     
     try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
             'Accept-Language': 'ar-SA,ar;q=0.9,en;q=0.8',
         }
-        response = session.get(url, headers=headers, timeout=30)
+        response = session_obj.get(url, headers=headers, timeout=30)
         response.encoding = 'utf-8'
 
         if response.status_code != 200:
-            logger.warning(f"فشل الاتصال بالطلب {app_number}: {response.status_code}")
             return 'غير مؤشر'
 
-        # 1️⃣ تنظيف الصفحة تماماً من أكواد JS و CSS المخفية
         soup = BeautifulSoup(response.text, 'html.parser')
+
+        # إزالة السكريبتات والستايلات لمنع الخداع
         for tag in soup(['script', 'style', 'noscript', 'meta']):
             tag.extract()
 
-        # 2️⃣ تحويل الصفحة إلى نص عادي موحد
-        plain_text = soup.get_text(separator=' ', strip=True)
+        # التحقق 1: هل الصفحة تحتوي على "تاريخ الطلب"؟ (للتأكد أنها صفحة تأشيرة صحيحة)
+        date_label = soup.find('label', string=re.compile(r'تاريخ الطلب'))
+        if not date_label:
+            # إذا لم نجد تاريخ الطلب، فالصفحة خاطئة أو غير مكتملة
+            return 'غير مؤشر'
 
-        # 3️⃣ البحث عن القاعدة: رقم المستند + رقم طويل
-        # الـ regex مرن ويتحمل أي مسافات أو أسطر جديدة بين الكلمات والرقم
-        pattern = r'رقم\s*المستند\s*.*?(\d{7,12})'
-        match = re.search(pattern, plain_text, re.IGNORECASE | re.DOTALL)
-
-        if match:
-            logger.info(f"✅ الطلب {app_number}: مؤشر")
+        # التحقق 2: هل يوجد وسم label مكتوب فيه "رقم المستند"؟
+        # هذا وسم HTML لا يوجد إلا في التأشيرات المؤشرة
+        doc_label = soup.find('label', string=re.compile(r'رقم المستند'))
+        
+        if doc_label:
+            logger.info(f"✅ الطلب {app_number}: مؤشر (تم العثور على رقم المستند)")
             return 'مؤشر'
         else:
-            logger.info(f"❌ الطلب {app_number}: غير مؤشر")
+            logger.info(f"❌ الطلب {app_number}: غير مؤشر (لم يتم العثور على رقم المستند)")
             return 'غير مؤشر'
 
     except Exception as e:
         logger.error(f"خطأ في فحص {app_number}: {str(e)}")
         return 'غير مؤشر'
     finally:
-        session.close()
+        session_obj.close()
 
-# ===== المسارات الرئيسية =====
 @app.route('/')
 @login_required
 def index():
@@ -124,10 +124,10 @@ def process_file():
         return jsonify({'error': 'الرجاء رفع ملف Excel فقط'}), 400
 
     try:
-        # قراءة الملف الأصلي بالكامل
+        # قراءة الملف الأصلي
         df = pd.read_excel(file)
 
-        # البحث عن عمود رقم الطلب بمرونة
+        # البحث عن عمود رقم الطلب
         col_name = None
         for col in df.columns:
             if 'رقم الطلب' in str(col) or 'application' in str(col).lower():
@@ -137,7 +137,7 @@ def process_file():
         if not col_name:
             return jsonify({'error': 'لم يتم العثور على عمود "رقم الطلب"'}), 400
 
-        # إضافة عمود الحالة فقط دون المساس بأي عمود موجود أصلاً
+        # إضافة عمود الحالة فقط
         if 'حالة التأشيرة' not in df.columns:
             df['حالة التأشيرة'] = ''
 
@@ -156,7 +156,7 @@ def process_file():
             else:
                 error_count += 1
 
-            #  تأخير ضروري جداً لتجنب حظر الخادم لكثرة الطلبات
+            # تأخير لتجنب الحظر
             time.sleep(2.5)
 
         filename = f"results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
